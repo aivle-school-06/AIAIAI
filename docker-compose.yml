@@ -1,0 +1,56 @@
+# =============================================================================
+# AI Financial Analysis Server - Docker Compose
+# =============================================================================
+# 로컬 개발 환경용
+
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------------------------
+  # AI Server
+  # ---------------------------------------------------------------------------
+  ai-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai-financial-server
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CACHE_ENABLED=true
+      - CACHE_TTL=3600
+    volumes:
+      # 개발 시 코드 변경 실시간 반영
+      - ./app:/app/app
+      # 데이터 및 모델 마운트
+      - ./data:/app/data
+      - ./ml_models:/app/ml_models
+      - ./reports:/app/reports
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis (캐시용 - 선택적)
+  # ---------------------------------------------------------------------------
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: ai-server-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+
+# volumes:
+#   redis_data:
+
+networks:
+  default:
+    name: ai-server-network

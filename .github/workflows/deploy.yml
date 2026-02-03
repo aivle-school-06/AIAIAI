@@ -1,0 +1,67 @@
+# =============================================================================
+# GitHub Actions - Azure Container Apps 배포
+# =============================================================================
+# main 브랜치에 푸시하면 자동 배포
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행 가능
+
+env:
+  AZURE_RESOURCE_GROUP: bigbig-rg
+  ACR_NAME: bigbigacr
+  APP_NAME: ai-server
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. Azure 로그인
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 3. ACR 로그인
+      - name: Login to ACR
+        run: az acr login --name ${{ env.ACR_NAME }}
+
+      # 4. Docker 이미지 빌드 및 푸시 (ACR Tasks - 클라우드 빌드)
+      - name: Build and push image
+        run: |
+          az acr build \
+            --registry ${{ env.ACR_NAME }} \
+            --image ${{ env.APP_NAME }}:${{ github.sha }} \
+            --image ${{ env.APP_NAME }}:latest \
+            .
+
+      # 5. Container App 업데이트
+      - name: Deploy to Container Apps
+        run: |
+          az containerapp update \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}
+
+      # 6. 배포 확인
+      - name: Verify deployment
+        run: |
+          APP_URL=$(az containerapp show \
+            --name ${{ env.APP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
+            --query "properties.configuration.ingress.fqdn" -o tsv)
+
+          echo "App URL: https://$APP_URL"
+          echo "Waiting for deployment..."
+          sleep 30
+
+          # Health check
+          curl -f "https://$APP_URL/api/v1/health" || echo "Health check pending..."
