@@ -5,6 +5,13 @@
 
 set -e
 
+# XGBoost/sklearn cgroup 이슈 해결 (반드시 Python 실행 전에 설정)
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
 echo "=============================================="
 echo "AI Financial Analysis Server - Starting..."
 echo "=============================================="
