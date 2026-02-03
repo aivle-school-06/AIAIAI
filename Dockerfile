@@ -49,6 +49,10 @@ RUN chmod +x /app/scripts/entrypoint.sh
 # 환경변수 설정
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+# XGBoost/sklearn cgroup 이슈 해결
+ENV OMP_NUM_THREADS=1
+ENV OPENBLAS_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
 
 # 포트 노출
 EXPOSE 8000

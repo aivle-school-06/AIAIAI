@@ -82,12 +82,15 @@ jobs:
               --ingress external \
               --cpu 1 \
               --memory 2Gi \
-              --min-replicas 0 \
+              --min-replicas 1 \
               --max-replicas 3 \
               --env-vars \
                 AZURE_STORAGE_CONNECTION_STRING="${{ steps.storage.outputs.connection_string }}" \
                 AZURE_STORAGE_CONTAINER="ai-server-assets" \
-                OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}"
+                OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
+                OMP_NUM_THREADS="1" \
+                OPENBLAS_NUM_THREADS="1" \
+                MKL_NUM_THREADS="1"
           fi
 
       # 7. 배포 확인
