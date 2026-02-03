@@ -29,6 +29,7 @@ WORKDIR /app
 # 런타임 의존성만 설치
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # builder에서 설치된 패키지 복사
@@ -57,9 +58,9 @@ ENV MKL_NUM_THREADS=1
 # 포트 노출
 EXPOSE 8000
 
-# 헬스체크 (데이터 로드 + 다운로드 시간 고려)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/api/v1/health')" || exit 1
+# 헬스체크 - curl 사용 (Python import 시 cgroup 이슈 회피)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # entrypoint 스크립트로 실행
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
