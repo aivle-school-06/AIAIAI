@@ -44,7 +44,7 @@ jobs:
           docker tag ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
-      # 5. App Service에 새 이미지 배포
+      # 5. App Service에 새 이미지 배포 (재시작 없이 자동 전환)
       - name: Deploy to App Service
         run: |
           az webapp config container set \
@@ -52,14 +52,7 @@ jobs:
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
             --container-image-name ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      # 6. 앱 재시작
-      - name: Restart App Service
-        run: |
-          az webapp restart \
-            --name ${{ env.WEBAPP_NAME }} \
-            --resource-group ${{ env.AZURE_RESOURCE_GROUP }}
-
-      # 7. 배포 확인
+      # 6. 배포 확인
       - name: Verify deployment
         run: |
           echo "=========================================="
