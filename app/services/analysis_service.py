@@ -61,6 +61,23 @@ class AnalysisService:
             'generated_at': datetime.now().isoformat(),
         }
 
+    # 지표명 매핑 (한글 -> 영문 약어)
+    METRIC_NAME_MAP = {
+        'ROA': 'ROA',
+        'ROE': 'ROE',
+        '매출액영업이익률': 'OpMargin',
+        '부채비율': 'DbRatio',
+        '자기자본비율': 'EqRatio',
+        '자본잠식률': 'CapImpRatio',
+        '단기차입금비율': 'STDebtRatio',
+        '유동비율': 'CurRatio',
+        '당좌비율': 'QkRatio',
+        '유동부채비율': 'CurLibRatio',
+        'CFO_자산비율': 'CFO_AsRatio',
+        'CFO_매출액비율': 'CFO_Sale',
+        'CFO증감률': 'CFO_GR',
+    }
+
     def get_prediction(self, company_code: str) -> Dict[str, Any]:
         """
         예측값만 간소화하여 반환 (13개 지표)
@@ -73,18 +90,34 @@ class AnalysisService:
         """
         full_result = self.predictor.predict(company_code)
 
-        # 예측값만 추출 (SHAP, 변화량 등 제외)
+        # 예측값만 추출 (SHAP, 변화량 등 제외) + 지표명 영문 변환
         predictions_simple = {}
         for metric, data in full_result['predictions'].items():
+            # 지표명을 영문으로 변환
+            eng_metric = self.METRIC_NAME_MAP.get(metric, metric)
             if isinstance(data, dict) and 'predicted' in data:
-                predictions_simple[metric] = data['predicted']
+                predictions_simple[eng_metric] = data['predicted']
             elif isinstance(data, dict) and 'error' in data:
-                predictions_simple[metric] = None
+                predictions_simple[eng_metric] = None
+
+        # company_code에서 대괄호 제거 (예: "[000020]" -> "000020")
+        raw_code = full_result['company_code']
+        clean_code = raw_code.strip('[]')
+
+        # base_period 변환 (예: "2025년 Q3" -> 20253)
+        raw_period = full_result['base_period']
+        # "2025년 Q3" -> "2025", "3" -> 20253
+        import re
+        match = re.match(r'(\d{4})년\s*Q(\d)', raw_period)
+        if match:
+            base_period_int = int(match.group(1)) * 10 + int(match.group(2))
+        else:
+            base_period_int = raw_period  # 파싱 실패 시 원본 유지
 
         return {
-            'company_code': full_result['company_code'],
+            'company_code': clean_code,
             'company_name': full_result['company_name'],
-            'base_period': full_result['base_period'],
+            'base_period': base_period_int,
             'predictions': predictions_simple,
         }
 
