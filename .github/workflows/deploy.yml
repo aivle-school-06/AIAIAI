@@ -1,5 +1,5 @@
 # =============================================================================
-# GitHub Actions - Azure Container Apps 배포
+# GitHub Actions - Azure App Service 배포
 # =============================================================================
 # main 브랜치에 푸시하면 자동 배포
 
@@ -13,8 +13,8 @@ on:
 env:
   AZURE_RESOURCE_GROUP: bigbig-rg
   ACR_NAME: bigbigacr
-  APP_NAME: ai-server
-  ENVIRONMENT_NAME: bigbig-env
+  IMAGE_NAME: ai-server
+  WEBAPP_NAME: bigbig-ai-server
 
 jobs:
   build-and-deploy:
@@ -36,73 +36,46 @@ jobs:
         run: |
           az acr login --name ${{ env.ACR_NAME }}
 
-      # 4. Docker 이미지 빌드 및 푸시 (GitHub에서 빌드)
+      # 4. Docker 이미지 빌드 및 푸시
       - name: Build and push image
         run: |
-          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }} .
-          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}
-          docker tag ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:latest
-          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:latest
+          docker build -t ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker tag ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }} ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:latest
 
-      # 5. Storage Connection String 가져오기
-      - name: Get Storage Connection String
-        id: storage
+      # 5. App Service에 새 이미지 배포
+      - name: Deploy to App Service
         run: |
-          CONN_STR=$(az storage account show-connection-string \
-            --name bigbigaistorage \
+          az webapp config container set \
+            --name ${{ env.WEBAPP_NAME }} \
             --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-            --query connectionString -o tsv)
-          echo "connection_string=$CONN_STR" >> $GITHUB_OUTPUT
+            --container-image-name ${{ env.ACR_NAME }}.azurecr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-      # 6. Container App 배포 (없으면 생성, 있으면 업데이트)
-      - name: Deploy to Container Apps
+      # 6. 앱 재시작
+      - name: Restart App Service
         run: |
-          # ACR 자격 증명
-          ACR_USERNAME=$(az acr credential show --name ${{ env.ACR_NAME }} --query username -o tsv)
-          ACR_PASSWORD=$(az acr credential show --name ${{ env.ACR_NAME }} --query "passwords[0].value" -o tsv)
-
-          # 앱이 존재하는지 확인
-          if az containerapp show --name ${{ env.APP_NAME }} --resource-group ${{ env.AZURE_RESOURCE_GROUP }} > /dev/null 2>&1; then
-            echo "Updating existing app..."
-            az containerapp update \
-              --name ${{ env.APP_NAME }} \
-              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-              --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}
-          else
-            echo "Creating new app..."
-            az containerapp create \
-              --name ${{ env.APP_NAME }} \
-              --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-              --environment ${{ env.ENVIRONMENT_NAME }} \
-              --image ${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }} \
-              --registry-server ${{ env.ACR_NAME }}.azurecr.io \
-              --registry-username $ACR_USERNAME \
-              --registry-password $ACR_PASSWORD \
-              --target-port 8000 \
-              --ingress external \
-              --cpu 1 \
-              --memory 2Gi \
-              --min-replicas 1 \
-              --max-replicas 3 \
-              --env-vars \
-                AZURE_STORAGE_CONNECTION_STRING="${{ steps.storage.outputs.connection_string }}" \
-                AZURE_STORAGE_CONTAINER="ai-server-assets" \
-                OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
-                OMP_NUM_THREADS="1" \
-                OPENBLAS_NUM_THREADS="1" \
-                MKL_NUM_THREADS="1"
-          fi
+          az webapp restart \
+            --name ${{ env.WEBAPP_NAME }} \
+            --resource-group ${{ env.AZURE_RESOURCE_GROUP }}
 
       # 7. 배포 확인
       - name: Verify deployment
         run: |
-          APP_URL=$(az containerapp show \
-            --name ${{ env.APP_NAME }} \
-            --resource-group ${{ env.AZURE_RESOURCE_GROUP }} \
-            --query "properties.configuration.ingress.fqdn" -o tsv)
+          echo "=========================================="
+          echo "App URL: https://${{ env.WEBAPP_NAME }}.azurewebsites.net"
+          echo "Health: https://${{ env.WEBAPP_NAME }}.azurewebsites.net/api/v1/health"
+          echo "Swagger: https://${{ env.WEBAPP_NAME }}.azurewebsites.net/docs"
+          echo "=========================================="
 
-          echo "=========================================="
-          echo "App URL: https://$APP_URL"
-          echo "Health: https://$APP_URL/api/v1/health"
-          echo "Swagger: https://$APP_URL/docs"
-          echo "=========================================="
+          # 서버 시작 대기 (최대 3분)
+          echo "Waiting for server to start..."
+          for i in {1..18}; do
+            if curl -s --max-time 10 "https://${{ env.WEBAPP_NAME }}.azurewebsites.net/api/v1/health" | grep -q "healthy"; then
+              echo "Server is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/18 - waiting 10s..."
+            sleep 10
+          done
+          echo "Warning: Health check not responding yet (may still be starting)"

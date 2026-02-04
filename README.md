@@ -15,7 +15,7 @@ KOSPI/KOSDAQ 상장기업 재무지표 예측 및 분석 보고서 생성 API �
 - **ML**: XGBoost, SHAP, scikit-learn
 - **LLM**: OpenAI GPT
 - **PDF**: FPDF2
-- **Deploy**: Docker, Azure Container Apps
+- **Deploy**: Docker, Azure App Service
 
 ## 빠른 시작
 
@@ -95,26 +95,40 @@ ai-server/
 └── docker-compose.yml
 ```
 
-## 배포 (Azure)
+## 배포 (Azure App Service)
+
+### 자동 배포 (GitHub Actions)
+
+main 브랜치에 푸시하면 자동으로 배포됩니다.
+
+```bash
+git push origin main
+```
+
+### 수동 배포
 
 ```bash
 # Azure CLI 로그인
 az login
 
-# Container Registry 생성
-az acr create --resource-group myRG --name myacr --sku Basic
+# Container Registry에 이미지 빌드 & 푸시
+az acr build --registry bigbigacr --image ai-server:latest .
 
-# 이미지 빌드 & 푸시
-az acr build --registry myacr --image ai-server:v1 .
+# App Service에 새 이미지 배포
+az webapp config container set \
+  --name bigbig-ai-server \
+  --resource-group bigbig-rg \
+  --container-image-name bigbigacr.azurecr.io/ai-server:latest
 
-# Container Apps 배포
-az containerapp create \
-  --name ai-server \
-  --resource-group myRG \
-  --image myacr.azurecr.io/ai-server:v1 \
-  --target-port 8000 \
-  --ingress external
+# 앱 재시작
+az webapp restart --name bigbig-ai-server --resource-group bigbig-rg
 ```
+
+### 배포 URL
+
+- **API**: https://bigbig-ai-server.azurewebsites.net
+- **Swagger**: https://bigbig-ai-server.azurewebsites.net/docs
+- **Health**: https://bigbig-ai-server.azurewebsites.net/api/v1/health
 
 ## 개발 가이드
 
