@@ -25,6 +25,15 @@ fpdf2>=2.7.0
 # LLM
 openai>=1.10.0
 
+# HuggingFace Transformers (감성 분석)
+transformers>=4.36.0
+torch>=2.1.0
+
+# News Extraction
+newspaper3k>=0.2.8
+lxml>=5.0.0
+lxml_html_clean>=0.1.0
+
 # HTTP Client
 httpx>=0.26.0
 aiohttp>=3.9.0

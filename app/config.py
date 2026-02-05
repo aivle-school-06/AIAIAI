@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = Field(default=None, description="OpenAI API 키")
 
     # =========================================================================
+    # Naver API (뉴스 검색용)
+    # =========================================================================
+    NAVER_CLIENT_ID: Optional[str] = Field(default=None, description="Naver API Client ID")
+    NAVER_CLIENT_SECRET: Optional[str] = Field(default=None, description="Naver API Client Secret")
+
+    # =========================================================================
+    # HuggingFace 모델 설정
+    # =========================================================================
+    HF_SENTIMENT_MODEL: str = Field(
+        default="snunlp/KR-FinBert-SC",
+        description="HuggingFace 감성분석 모델명"
+    )
+
+    # =========================================================================
     # 캐시 설정
     # =========================================================================
     CACHE_ENABLED: bool = Field(default=True, description="캐시 사용 여부")

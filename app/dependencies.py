@@ -12,6 +12,8 @@ import logging
 from app.config import Settings, get_settings
 from app.core.data_loader import DataLoader
 from app.core.predictor import Predictor
+from app.core.sentiment_analyzer import SentimentAnalyzer
+from app.services.news_service import NewsService
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +26,8 @@ class Container:
 
     _data_loader: Optional[DataLoader] = None
     _predictor: Optional[Predictor] = None
+    _sentiment_analyzer: Optional[SentimentAnalyzer] = None
+    _news_service: Optional[NewsService] = None
     _initialized: bool = False
 
     @classmethod
@@ -48,6 +52,14 @@ class Container:
             cls._predictor = Predictor(settings, cls._data_loader)
             logger.info("Predictor initialized")
 
+            # 감성 분석기 초기화 (HuggingFace 모델 로드)
+            cls._sentiment_analyzer = SentimentAnalyzer(settings)
+            logger.info("SentimentAnalyzer initialized")
+
+            # 뉴스 서비스 초기화
+            cls._news_service = NewsService(settings, cls._sentiment_analyzer)
+            logger.info("NewsService initialized")
+
             cls._initialized = True
             logger.info("Container initialization complete")
 
@@ -61,6 +73,8 @@ class Container:
         logger.info("Shutting down container...")
         cls._data_loader = None
         cls._predictor = None
+        cls._sentiment_analyzer = None
+        cls._news_service = None
         cls._initialized = False
 
     @classmethod
@@ -76,6 +90,20 @@ class Container:
         if cls._predictor is None:
             raise RuntimeError("Container not initialized. Call initialize() first.")
         return cls._predictor
+
+    @classmethod
+    def get_sentiment_analyzer(cls) -> SentimentAnalyzer:
+        """SentimentAnalyzer 인스턴스 반환"""
+        if cls._sentiment_analyzer is None:
+            raise RuntimeError("Container not initialized. Call initialize() first.")
+        return cls._sentiment_analyzer
+
+    @classmethod
+    def get_news_service(cls) -> NewsService:
+        """NewsService 인스턴스 반환"""
+        if cls._news_service is None:
+            raise RuntimeError("Container not initialized. Call initialize() first.")
+        return cls._news_service
 
 
 # =============================================================================
@@ -103,6 +131,30 @@ def get_predictor() -> Predictor:
             return predictor.predict(code)
     """
     return Container.get_predictor()
+
+
+def get_sentiment_analyzer() -> SentimentAnalyzer:
+    """
+    SentimentAnalyzer 의존성
+
+    Usage:
+        @router.get("/sentiment")
+        def analyze(analyzer: SentimentAnalyzer = Depends(get_sentiment_analyzer)):
+            return analyzer.predict(["text"])
+    """
+    return Container.get_sentiment_analyzer()
+
+
+def get_news_service() -> NewsService:
+    """
+    NewsService 의존성
+
+    Usage:
+        @router.post("/news/{company_code}")
+        def get_news(service: NewsService = Depends(get_news_service)):
+            return service.analyze_news("company_name")
+    """
+    return Container.get_news_service()
 
 
 # =============================================================================

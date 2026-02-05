@@ -10,7 +10,7 @@ API 라우터 통합 모듈
 """
 from fastapi import APIRouter
 
-from app.api.v1 import health, data, analysis, admin
+from app.api.v1 import health, data, analysis, admin, news
 
 # 메인 API 라우터
 api_router = APIRouter()
@@ -45,4 +45,11 @@ api_router.include_router(
     admin.router,
     prefix="/v1/admin",
     tags=["Admin"]
+)
+
+# 뉴스 분석
+api_router.include_router(
+    news.router,
+    prefix="/v1/news",
+    tags=["News Analysis"]
 )
