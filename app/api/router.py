@@ -47,9 +47,9 @@ api_router.include_router(
     tags=["Admin"]
 )
 
-# 뉴스 분석
+# 뉴스 & 보고서 분석
 api_router.include_router(
     news.router,
     prefix="/v1/news",
-    tags=["News Analysis"]
+    tags=["News & Report"]
 )

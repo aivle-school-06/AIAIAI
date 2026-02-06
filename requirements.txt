@@ -38,6 +38,9 @@ lxml_html_clean>=0.1.0
 httpx>=0.26.0
 aiohttp>=3.9.0
 
+# DART API
+opendartreader>=0.2.0
+
 # Utils
 python-dotenv>=1.0.0
 

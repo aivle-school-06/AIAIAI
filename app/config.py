@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     NAVER_CLIENT_SECRET: Optional[str] = Field(default=None, description="Naver API Client Secret")
 
     # =========================================================================
+    # DART API (사업보고서 조회용)
+    # =========================================================================
+    DART_API_KEY: Optional[str] = Field(default=None, description="DART OpenAPI 키")
+
+    # =========================================================================
     # HuggingFace 모델 설정
     # =========================================================================
     HF_SENTIMENT_MODEL: str = Field(

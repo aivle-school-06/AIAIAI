@@ -14,6 +14,7 @@ from app.core.data_loader import DataLoader
 from app.core.predictor import Predictor
 from app.core.sentiment_analyzer import SentimentAnalyzer
 from app.services.news_service import NewsService
+from app.services.dart_service import DartService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class Container:
     _predictor: Optional[Predictor] = None
     _sentiment_analyzer: Optional[SentimentAnalyzer] = None
     _news_service: Optional[NewsService] = None
+    _dart_service: Optional[DartService] = None
     _initialized: bool = False
 
     @classmethod
@@ -60,6 +62,10 @@ class Container:
             cls._news_service = NewsService(settings, cls._sentiment_analyzer)
             logger.info("NewsService initialized")
 
+            # DART 서비스 초기화
+            cls._dart_service = DartService(settings)
+            logger.info("DartService initialized")
+
             cls._initialized = True
             logger.info("Container initialization complete")
 
@@ -75,6 +81,7 @@ class Container:
         cls._predictor = None
         cls._sentiment_analyzer = None
         cls._news_service = None
+        cls._dart_service = None
         cls._initialized = False
 
     @classmethod
@@ -104,6 +111,13 @@ class Container:
         if cls._news_service is None:
             raise RuntimeError("Container not initialized. Call initialize() first.")
         return cls._news_service
+
+    @classmethod
+    def get_dart_service(cls) -> DartService:
+        """DartService 인스턴스 반환"""
+        if cls._dart_service is None:
+            raise RuntimeError("Container not initialized. Call initialize() first.")
+        return cls._dart_service
 
 
 # =============================================================================
@@ -155,6 +169,18 @@ def get_news_service() -> NewsService:
             return service.analyze_news("company_name")
     """
     return Container.get_news_service()
+
+
+def get_dart_service() -> DartService:
+    """
+    DartService 의존성
+
+    Usage:
+        @router.post("/report/{company_code}")
+        def get_report(service: DartService = Depends(get_dart_service)):
+            return service.analyze_report_async("code", "name")
+    """
+    return Container.get_dart_service()
 
 
 # =============================================================================

@@ -10,8 +10,9 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
 from pydantic import BaseModel, Field
 
-from app.dependencies import get_news_service
+from app.dependencies import get_news_service, get_dart_service
 from app.services.news_service import NewsService
+from app.services.dart_service import DartService
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +42,10 @@ class NewsItem(BaseModel):
     """뉴스 아이템"""
     title: str = Field(..., description="뉴스 제목")
     summary: str = Field(..., description="본문 요약")
-    score: float = Field(..., description="긍정 점수 (0~1)")
-    date: str = Field(..., description="발행일")
-    link: str = Field(default="", description="원문 링크")
-    sentiment: str = Field(..., description="감성 라벨 (NEG/NEU/POS)")
+    score: Optional[float] = Field(None, description="긍정 점수 (0~1)")
+    date: Optional[str] = Field(None, description="발행일")
+    link: Optional[str] = Field(None, description="원문 링크")
+    sentiment: Optional[str] = Field(None, description="감성 라벨 (NEG/NEU/POS)")
 
 
 class NewsAnalysisResponse(BaseModel):
@@ -142,4 +143,46 @@ async def analyze_company_news_quick(
         raise HTTPException(
             status_code=500,
             detail=f"뉴스 분석 중 오류 발생: {str(e)}"
+        )
+
+
+# =============================================================================
+# 사업보고서 엔드포인트
+# =============================================================================
+@router.get(
+    "/{company_code}/report",
+    summary="사업보고서 분석",
+    description="DART 정기보고서에서 '사업의 내용' 7개 항목을 추출하고 요약합니다.",
+    response_model=NewsAnalysisResponse,
+)
+async def analyze_company_report(
+    company_code: str,
+    service: DartService = Depends(get_dart_service),
+):
+    """
+    사업보고서 분석
+
+    - company_code: 종목코드 (path parameter, 예: 005930)
+
+    파이프라인:
+    1. DART API로 최신 정기보고서 조회
+    2. '사업의 내용' 하위 7개 항목 추출 (병렬)
+    3. GPT로 카드뉴스 형식 요약 (병렬)
+    4. KR-FinBert-SC 모델로 감성 분석
+
+    Returns:
+        - news: [{title, summary, score, date, link, sentiment}, ...]
+        - average_score: 전체 항목의 평균 긍정 점수
+    """
+    logger.info(f"Report analysis request - code: {company_code}")
+
+    try:
+        result = await service.analyze_report_async(corp_code=company_code)
+        return result
+
+    except Exception as e:
+        logger.exception(f"Report analysis failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"보고서 분석 중 오류 발생: {str(e)}"
         )
