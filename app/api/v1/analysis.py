@@ -18,7 +18,8 @@ from app.core.data_loader import DataLoader
 from app.core.predictor import Predictor
 from app.services.analysis_service import AnalysisService
 from app.services.health_score_service import HealthScoreService
-from app.models.response import HealthScoreResponse
+from app.services.signal_service import SignalService
+from app.models.response import HealthScoreResponse, SignalResponse
 from app.core.constants import ALL_TARGETS
 from app.config import settings
 
@@ -65,6 +66,13 @@ def get_health_score_service(
 ) -> HealthScoreService:
     """HealthScoreService 의존성 주입"""
     return HealthScoreService(data_loader, predictor)
+
+
+def get_signal_service(
+    data_loader: DataLoader = Depends(get_data_loader),
+) -> SignalService:
+    """SignalService 의존성 주입"""
+    return SignalService(data_loader)
 
 
 # =============================================================================
@@ -215,6 +223,30 @@ async def get_health_score(
         company_code = f'[{company_code}]'
 
     return service.get_health_scores(company_code)
+
+
+@router.get(
+    "/{company_code}/signals/{period}",
+    summary="업종상대 신호등 조회",
+    description="기업의 12개 재무지표를 업종 평균 대비 신호등으로 반환합니다.",
+    response_model=SignalResponse,
+)
+async def get_signals(
+    company_code: str,
+    period: str,
+    service: SignalService = Depends(get_signal_service),
+):
+    """
+    업종상대 신호등 조회
+
+    - 12개 지표에 대해 업종상대 z-score 기반 신호등 제공
+    - Green (상위 30%), Yellow (중위 30%), Red (하위 40%), Grey (결측)
+    - period 형식: 20253 (년도 + 분기)
+    """
+    if not company_code.startswith('['):
+        company_code = f'[{company_code}]'
+
+    return service.get_signals(company_code, period)
 
 
 @router.get(

@@ -210,3 +210,40 @@ class HealthScoreResponse(BaseModel):
                 "predicted_score": 87.0,
             }
         }
+
+
+# =========================================================================
+# 업종상대 신호등 응답
+# =========================================================================
+
+class SignalResponse(BaseModel):
+    """업종상대 신호등 응답"""
+    company_code: str = Field(..., description="기업코드")
+    company_name: str = Field(..., description="기업명")
+    industry: str = Field(..., description="업종명")
+    period: str = Field(..., description="분기 (예: 20253)")
+    signals: Dict[str, str] = Field(..., description="지표별 신호등 (green/yellow/red/grey)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "company_code": "005930",
+                "company_name": "삼성전자",
+                "industry": "통신 및 방송장비 제조업",
+                "period": "20253",
+                "signals": {
+                    "ROA": "green",
+                    "ROE": "green",
+                    "OpMargin": "grey",
+                    "DbRatio": "yellow",
+                    "EqRatio": "green",
+                    "CapImpRatio": "green",
+                    "STDebtRatio": "green",
+                    "CurRatio": "yellow",
+                    "QkRatio": "green",
+                    "CurLibRatio": "yellow",
+                    "CFO_AsRatio": "green",
+                    "CFO_Sale": "grey",
+                },
+            }
+        }
