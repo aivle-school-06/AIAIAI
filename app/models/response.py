@@ -170,3 +170,43 @@ class SuccessResponse(BaseModel):
     success: bool = True
     message: str
     data: Optional[Dict[str, Any]] = None
+
+
+# =========================================================================
+# 재무건전성 점수 응답
+# =========================================================================
+
+class HealthQuarterItem(BaseModel):
+    """분기별 건전성 점수"""
+    period: str = Field(..., description="분기 (예: 20253)")
+    score: Optional[float] = Field(None, description="건전성 점수 (0~100)")
+    label: Optional[str] = Field(None, description="라벨 (위험/주의/안정)")
+    type: str = Field(..., description="데이터 타입 (actual/predicted)")
+
+
+class HealthScoreResponse(BaseModel):
+    """재무건전성 점수 응답"""
+    company_code: str = Field(..., description="기업코드")
+    company_name: str = Field(..., description="기업명")
+    quarters: List[HealthQuarterItem] = Field(
+        ..., description="분기별 건전성 점수 (과거 4분기 + 예측 1분기)"
+    )
+    current_score: Optional[float] = Field(None, description="현재 분기 점수")
+    predicted_score: Optional[float] = Field(None, description="예측 분기 점수")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "company_code": "005930",
+                "company_name": "삼성전자",
+                "quarters": [
+                    {"period": "20244", "score": 85.0, "label": "안정", "type": "actual"},
+                    {"period": "20251", "score": 88.0, "label": "안정", "type": "actual"},
+                    {"period": "20252", "score": 82.0, "label": "안정", "type": "actual"},
+                    {"period": "20253", "score": 90.0, "label": "안정", "type": "actual"},
+                    {"period": "20254", "score": 87.0, "label": "안정", "type": "predicted"},
+                ],
+                "current_score": 90.0,
+                "predicted_score": 87.0,
+            }
+        }

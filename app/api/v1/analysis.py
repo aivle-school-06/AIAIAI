@@ -17,6 +17,8 @@ from app.dependencies import get_data_loader, get_predictor
 from app.core.data_loader import DataLoader
 from app.core.predictor import Predictor
 from app.services.analysis_service import AnalysisService
+from app.services.health_score_service import HealthScoreService
+from app.models.response import HealthScoreResponse
 from app.core.constants import ALL_TARGETS
 from app.config import settings
 
@@ -55,6 +57,14 @@ def get_analysis_service(
 ) -> AnalysisService:
     """AnalysisService 의존성 주입"""
     return AnalysisService(data_loader, predictor)
+
+
+def get_health_score_service(
+    data_loader: DataLoader = Depends(get_data_loader),
+    predictor: Predictor = Depends(get_predictor),
+) -> HealthScoreService:
+    """HealthScoreService 의존성 주입"""
+    return HealthScoreService(data_loader, predictor)
 
 
 # =============================================================================
@@ -182,6 +192,29 @@ async def get_shap_analysis(
         company_code = f'[{company_code}]'
 
     return service.get_shap_analysis(company_code, metric)
+
+
+@router.get(
+    "/{company_code}/health-score",
+    summary="재무건전성 점수 조회",
+    description="기업의 재무건전성 점수를 분기별로 반환합니다.",
+    response_model=HealthScoreResponse,
+)
+async def get_health_score(
+    company_code: str,
+    service: HealthScoreService = Depends(get_health_score_service),
+):
+    """
+    재무건전성 점수 조회
+
+    - 5개 핵심 지표 기반 0~100점 산출
+    - 과거 4분기 + 예측 1분기 제공
+    - 라벨: 위험(<40), 주의(40~70), 안정(≥70)
+    """
+    if not company_code.startswith('['):
+        company_code = f'[{company_code}]'
+
+    return service.get_health_scores(company_code)
 
 
 @router.get(

@@ -24,39 +24,9 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# 상수 (기존 config에서 가져옴)
+# 상수 (config에서 import)
 # =============================================================================
-TARGET_METRICS = {
-    '수익성': ['ROA', 'ROE', '매출액영업이익률'],
-    '안정성': ['부채비율', '차입금의존도'],
-    '차입금': ['순차입금비율', '이자보상배율'],
-    '유동성': ['유동비율', '당좌비율'],
-    '현금흐름': ['CFO_자산비율', 'FCF_자산비율', 'CAPEX_자산비율', '영업현금흐름비율'],
-}
-
-METRIC_DESCRIPTION = {
-    'ROA': '자산 대비 순이익률',
-    'ROE': '자기자본 대비 순이익률',
-    '매출액영업이익률': '매출 대비 영업이익 비율',
-    '부채비율': '자기자본 대비 부채 비율',
-    '차입금의존도': '총자산 대비 차입금 비율',
-    '순차입금비율': '순차입금 대비 자기자본 비율',
-    '이자보상배율': '영업이익 대비 이자비용 배율',
-    '유동비율': '유동부채 대비 유동자산 비율',
-    '당좌비율': '재고 제외 유동자산 비율',
-    'CFO_자산비율': '영업현금흐름 자산 비율',
-    'FCF_자산비율': '잉여현금흐름 자산 비율',
-    'CAPEX_자산비율': '자본적 지출 자산 비율',
-    '영업현금흐름비율': '영업현금흐름 영업이익 비율',
-}
-
-METRIC_DIRECTION = {
-    'ROA': 'higher', 'ROE': 'higher', '매출액영업이익률': 'higher',
-    '부채비율': 'lower', '차입금의존도': 'lower', '순차입금비율': 'lower',
-    '이자보상배율': 'higher', '유동비율': 'higher', '당좌비율': 'higher',
-    'CFO_자산비율': 'higher', 'FCF_자산비율': 'higher',
-    'CAPEX_자산비율': 'context', '영업현금흐름비율': 'higher',
-}
+from app.report.config import TARGET_METRICS, METRIC_DESCRIPTION, METRIC_DIRECTION
 
 
 class AsyncLLMService:
@@ -217,20 +187,22 @@ class AsyncPDFService:
                     category, metrics, opinion_data, cat_predictions
                 )
 
-        # 3. 시계열 분석 (5개)
+        # 3. 시계열 분석 (5개) - SHAP 데이터 추가
         historical = company_data.get('historical', {}) if company_data else {}
         trend_data = company_data.get('trend', {}) if company_data else {}
         relative_data = company_data.get('relative', {}) if company_data else {}
 
         for category, metrics in TARGET_METRICS.items():
             metrics_data = {m: historical.get('metrics', {}).get(m, []) for m in metrics}
+            # 해당 카테고리 지표들의 SHAP 데이터 추출
+            category_shap = {m: shap_data.get(m) for m in metrics if shap_data.get(m)}
             if any(metrics_data.values()):
                 tasks[f'timeseries_{category}'] = self._generate_timeseries(
                     company_name, industry, category,
-                    metrics_data, trend_data, relative_data
+                    metrics_data, trend_data, relative_data, category_shap
                 )
 
-        # 4. 업종 비교 종합
+        # 4. 업종 비교 종합 - SHAP 데이터 추가
         if industry_section and industry_comparison:
             category_positions = industry_section.get('category_position', {})
             strengths = industry_section.get('strengths', [])
@@ -244,16 +216,18 @@ class AsyncPDFService:
 
             tasks['industry_comparison'] = self._generate_industry_comparison(
                 company_name, industry, category_positions,
-                comparison_data, strengths, weaknesses
+                comparison_data, strengths, weaknesses, shap_data
             )
 
-            # 5. 카테고리별 업종 비교 (5개)
+            # 5. 카테고리별 업종 비교 (5개) - SHAP 데이터 추가
             for category, metrics in TARGET_METRICS.items():
                 cat_metrics = {m: comparison_data.get(m) for m in metrics if comparison_data.get(m)}
+                # 해당 카테고리 지표들의 SHAP 데이터 추출
+                category_shap = {m: shap_data.get(m) for m in metrics if shap_data.get(m)}
                 position = category_positions.get(category)
                 if cat_metrics and position:
                     tasks[f'category_industry_{category}'] = self._generate_category_industry(
-                        company_name, industry, category, cat_metrics, position
+                        company_name, industry, category, cat_metrics, position, category_shap
                     )
 
         # 모든 태스크 병렬 실행
@@ -293,10 +267,12 @@ class AsyncPDFService:
         """종합 의견 생성"""
         system_prompt = """당신은 한국 상장기업 재무 분석 전문가입니다.
 주어진 재무 데이터와 AI 예측 결과를 분석하여 종합 의견을 작성해주세요.
+특히 SHAP 분석 요인을 활용하여 'AI가 왜 그런 예측을 했는지' 구체적으로 설명해주세요.
+예: "AI가 ROA 상승을 예측한 주요 이유는 최근 4분기 ROA 추세(+0.70)가 긍정적으로..."
 
 응답 형식:
 [전문가용]
-(금융 전문가를 위한 상세 분석. 5~7문장)
+(금융 전문가를 위한 상세 분석. SHAP 요인을 활용하여 AI 예측 근거 설명. 5~7문장)
 
 [비전문가용]
 (일반인을 위한 쉬운 설명)
@@ -345,6 +321,27 @@ class AsyncPDFService:
 - 개선 예측: {', '.join(prediction.get('improving', [])) or '없음'}
 - 악화 예측: {', '.join(prediction.get('declining', [])) or '없음'}
 """
+
+        # SHAP 분석 요약 추가
+        shap_analysis = data.get('shap_analysis', {})
+        if shap_analysis:
+            # 주요 지표의 SHAP 요인 요약
+            main_metrics = ['ROA', 'ROE', '매출액영업이익률']
+            prompt += "\n## AI 예측 핵심 요인 (SHAP 분석)\n"
+            for metric in main_metrics:
+                if metric in shap_analysis:
+                    shap = shap_analysis[metric]
+                    pos = shap.get('positive_factors', [])[:5]
+                    neg = shap.get('negative_factors', [])[:5]
+                    if pos or neg:
+                        prompt += f"\n### {metric}\n"
+                        if pos:
+                            factors = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in pos])
+                            prompt += f"- 상승 요인: {factors}\n"
+                        if neg:
+                            factors = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in neg])
+                            prompt += f"- 하락 요인: {factors}\n"
+
         return prompt
 
     def _parse_opinion_response(self, content: str) -> Dict:
@@ -378,9 +375,12 @@ class AsyncPDFService:
     ) -> Dict:
         """카테고리별 분석"""
         system_prompt = """당신은 한국 상장기업 재무 분석 전문가입니다.
+AI 예측 분석 시, SHAP 요인을 바탕으로 '왜' 그런 예측이 나왔는지 구체적으로 설명해주세요.
+예: "ROA 상승 예측의 주요 요인은 최근 4분기 ROA 추세(+0.70)가 긍정적으로 반영되었으며..."
+
 응답 형식:
 [카테고리 종합]
-(3~4문장 분석)
+(3~4문장 분석 - SHAP 요인을 활용하여 AI 예측 근거 설명)
 
 [전망]
 (positive/negative/neutral)
@@ -407,6 +407,26 @@ class AsyncPDFService:
                 prompt += "\n"
                 if pred and 'predicted' in pred:
                     prompt += f"- 예측: {pred['predicted']:.2f}% (변화: {pred.get('change', 0):+.2f}%p)\n"
+
+                    # SHAP 분석 추가 (top/bottom 5개)
+                    shap = pred.get('shap_analysis', {})
+                    if shap:
+                        pos_factors = shap.get('positive_factors', [])[:5]
+                        neg_factors = shap.get('negative_factors', [])[:5]
+
+                        if pos_factors:
+                            prompt += "- AI 예측 상승 요인:\n"
+                            for f in pos_factors:
+                                desc = f.get('description', f.get('feature', ''))
+                                val = f.get('shap_value', 0)
+                                prompt += f"  • {desc} ({val:+.2f})\n"
+
+                        if neg_factors:
+                            prompt += "- AI 예측 하락 요인:\n"
+                            for f in neg_factors:
+                                desc = f.get('description', f.get('feature', ''))
+                                val = f.get('shap_value', 0)
+                                prompt += f"  • {desc} ({val:+.2f})\n"
 
         content = await self.llm.call(system_prompt, prompt, max_tokens=1500)
         return self._parse_category_response(content, category, metrics, predictions)
@@ -439,15 +459,15 @@ class AsyncPDFService:
                     if line.strip().startswith(('•', '-'))
                 ][:3]
 
-        # metrics 기본값
+        # metrics 기본값 (SHAP top/bottom 5개)
         for metric in metrics:
             pred = predictions.get(metric, {})
             shap = pred.get('shap_analysis', {}) if pred else {}
             result['metrics'][metric] = {
                 'insight': '',
                 'factors': {
-                    'positive': shap.get('positive_factors', [])[:3],
-                    'negative': shap.get('negative_factors', [])[:3],
+                    'positive': shap.get('positive_factors', [])[:5],
+                    'negative': shap.get('negative_factors', [])[:5],
                 }
             }
 
@@ -455,10 +475,13 @@ class AsyncPDFService:
 
     async def _generate_timeseries(
         self, company_name: str, industry: str, category: str,
-        metrics_data: Dict, trend_data: Dict, relative_data: Dict
+        metrics_data: Dict, trend_data: Dict, relative_data: Dict,
+        shap_data: Dict = None
     ) -> str:
-        """시계열 분석"""
-        system_prompt = "당신은 한국 상장기업 재무 분석 전문가입니다. 시계열 데이터를 분석하여 간결한 인사이트를 제공합니다."
+        """시계열 분석 (SHAP 요인 포함)"""
+        system_prompt = """당신은 한국 상장기업 재무 분석 전문가입니다.
+시계열 데이터와 AI가 분석한 주요 영향 요인을 종합하여 인사이트를 제공합니다.
+데이터 추세와 AI 분석 요인을 연결하여 설명해주세요."""
 
         prompt = f"'{category}' 카테고리 시계열 분석:\n"
         prompt += f"- 기업명: {company_name}\n- 업종: {industry}\n\n"
@@ -476,17 +499,30 @@ class AsyncPDFService:
             if rel is not None:
                 prompt += f"- 업종대비: {rel:+.1f}%p\n"
 
-        prompt += "\n3~4문장으로 분석해주세요."
+            # SHAP 요인 추가 (설명과 값 포함, top/bottom 5개)
+            if shap_data and metric in shap_data:
+                shap_info = shap_data[metric]
+                pos_factors = shap_info.get('positive_factors', [])[:5]
+                neg_factors = shap_info.get('negative_factors', [])[:5]
+                if pos_factors:
+                    factors_str = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in pos_factors])
+                    prompt += f"- AI 상승요인: {factors_str}\n"
+                if neg_factors:
+                    factors_str = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in neg_factors])
+                    prompt += f"- AI 하락요인: {factors_str}\n"
 
-        return await self.llm.call(system_prompt, prompt, max_tokens=500)
+        prompt += "\n위 데이터와 AI 분석 요인(SHAP 값)을 종합하여 '왜' 그런 예측이 나왔는지 3~4문장으로 설명해주세요."
+
+        return await self.llm.call(system_prompt, prompt, max_tokens=600)
 
     async def _generate_industry_comparison(
         self, company_name: str, industry: str,
         category_positions: Dict, comparison_data: Dict,
-        strengths: List, weaknesses: List
+        strengths: List, weaknesses: List, shap_data: Dict = None
     ) -> str:
-        """업종 비교 종합"""
-        system_prompt = "당신은 한국 상장기업 재무 분석 전문가입니다."
+        """업종 비교 종합 (SHAP 요인 포함)"""
+        system_prompt = """당신은 한국 상장기업 재무 분석 전문가입니다.
+업종 내 위치와 AI가 분석한 주요 영향 요인을 종합하여 인사이트를 제공합니다."""
 
         prompt = f"업종 내 위치 분석:\n- 기업명: {company_name}\n- 업종: {industry}\n\n"
         prompt += "## 카테고리별 순위\n"
@@ -499,27 +535,57 @@ class AsyncPDFService:
         if weaknesses:
             prompt += f"## 약점: {', '.join([w['metric'] for w in weaknesses[:3]])}\n"
 
-        prompt += "\n4~5문장으로 분석해주세요."
+        # SHAP 요인 추가 - 전체 요약 (설명과 값 포함)
+        if shap_data:
+            all_pos_factors = []
+            all_neg_factors = []
+            for metric, shap_info in shap_data.items():
+                pos = shap_info.get('positive_factors', [])[:1]
+                neg = shap_info.get('negative_factors', [])[:1]
+                all_pos_factors.extend([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in pos])
+                all_neg_factors.extend([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in neg])
 
-        return await self.llm.call(system_prompt, prompt, max_tokens=600)
+            if all_pos_factors:
+                prompt += f"\n## AI 분석 - 주요 상승 요인\n{', '.join(all_pos_factors[:5])}\n"
+            if all_neg_factors:
+                prompt += f"\n## AI 분석 - 주요 하락 요인\n{', '.join(all_neg_factors[:5])}\n"
+
+        prompt += "\n위 데이터와 AI 분석 요인(SHAP 값)을 종합하여 '왜' 그런 예측이 나왔는지 4~5문장으로 설명해주세요."
+
+        return await self.llm.call(system_prompt, prompt, max_tokens=700)
 
     async def _generate_category_industry(
         self, company_name: str, industry: str, category: str,
-        metrics_comparison: Dict, position: float
+        metrics_comparison: Dict, position: float, shap_data: Dict = None
     ) -> str:
-        """카테고리별 업종 비교"""
-        system_prompt = "당신은 한국 상장기업 재무 분석 전문가입니다."
+        """카테고리별 업종 비교 (SHAP 요인 포함)"""
+        system_prompt = """당신은 한국 상장기업 재무 분석 전문가입니다.
+업종 비교 데이터와 AI가 분석한 영향 요인을 연결하여 설명해주세요."""
 
         rank = f"상위 {position:.0f}%" if position <= 50 else f"하위 {100-position:.0f}%"
         prompt = f"'{category}' 업종 비교:\n- 기업: {company_name}\n- 순위: {rank}\n\n"
 
         for metric, info in metrics_comparison.items():
             if info and info.get('company') is not None:
-                prompt += f"- {metric}: {info['company']:.1f}% (평균 {info.get('industry_mean', 0):.1f}%)\n"
+                prompt += f"### {metric}\n"
+                prompt += f"- 기업값: {info['company']:.1f}% (업종평균 {info.get('industry_mean', 0):.1f}%)\n"
+                prompt += f"- 백분위: {info.get('percentile', 50):.0f}%\n"
 
-        prompt += "\n2~3문장으로 분석해주세요."
+                # 해당 지표의 SHAP 요인 추가 (설명과 값 포함, top/bottom 5개)
+                if shap_data and metric in shap_data:
+                    shap_info = shap_data[metric]
+                    pos_factors = shap_info.get('positive_factors', [])[:5]
+                    neg_factors = shap_info.get('negative_factors', [])[:5]
+                    if pos_factors:
+                        factors_str = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in pos_factors])
+                        prompt += f"- AI 상승요인: {factors_str}\n"
+                    if neg_factors:
+                        factors_str = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in neg_factors])
+                        prompt += f"- AI 하락요인: {factors_str}\n"
 
-        return await self.llm.call(system_prompt, prompt, max_tokens=300)
+        prompt += "\n위 데이터와 AI 분석 요인(SHAP 값)을 종합하여 '왜' 그런 예측이 나왔는지 2~3문장으로 설명해주세요."
+
+        return await self.llm.call(system_prompt, prompt, max_tokens=400)
 
     # =========================================================================
     # PDF 렌더링

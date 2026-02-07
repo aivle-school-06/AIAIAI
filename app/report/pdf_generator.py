@@ -19,6 +19,10 @@ from .config import TARGET_METRICS, ALL_TARGETS, METRIC_DIRECTION, get_feature_d
 
 # 디자인 컬러 팔레트
 class Colors:
+    # 섹션 헤더 색상 (제목 박스, 가로선)
+    SECTION = (0, 0, 0)              # 검정색
+    SECTION_LINE = (0, 0, 0)         # 검정색
+
     PRIMARY = (41, 128, 185)
     PRIMARY_DARK = (31, 97, 141)
     PRIMARY_LIGHT = (174, 214, 241)
@@ -64,6 +68,25 @@ CATEGORY_COLORS = {
     '현금흐름': (Colors.CAT_CASHFLOW, Colors.CAT_CASHFLOW_LIGHT),
 }
 
+# 지표 → 카테고리 매핑
+METRIC_TO_CATEGORY = {
+    'ROA': '수익성', 'ROE': '수익성', '매출액영업이익률': '수익성', '매출액순이익률': '수익성',
+    '부채비율': '안정성', '자기자본비율': '안정성', '자본잠식률': '안정성',
+    '유동비율': '유동성', '당좌비율': '유동성', '유동부채비율': '유동성', '이자보상배율': '유동성',
+    '단기차입금비율': '차입금',
+    'CFO_자산비율': '현금흐름', 'CFO_매출액비율': '현금흐름', 'CFO증감률': '현금흐름',
+    '총자산회전율': '현금흐름', '재고자산회전율': '현금흐름', '매출채권회전율': '현금흐름',
+}
+
+# 섹션 설명
+SECTION_DESCRIPTIONS = {
+    '1': '기업의 재무 건전성과 AI 예측 결과를 한눈에 확인합니다.',
+    '2': '5개 카테고리별 재무지표의 현황과 시계열 추이를 분석합니다.',
+    '3': '동일 업종 내 기업의 상대적 위치와 강점/약점을 파악합니다.',
+    '4': 'AI 모델이 예측한 다음 분기 재무지표와 주요 영향 요인을 설명합니다.',
+    '5': '전문가와 비전문가를 위한 종합적인 재무 분석 의견을 제공합니다.',
+}
+
 
 class PDFReport(FPDF):
     """시각적 분석이 포함된 Premium PDF 보고서"""
@@ -103,18 +126,25 @@ class PDFReport(FPDF):
 
     def section_header(self, number: str, title: str):
         self.ln(3)
-        self.set_fill_color(*Colors.PRIMARY)
+        self.set_fill_color(*Colors.SECTION)
         self.set_text_color(*Colors.WHITE)
         self.set_font('AppleSD', '', 11)
         self.cell(8, 8, number, fill=True, align='C')
         self.set_text_color(*Colors.DARK)
         self.set_font('AppleSD', '', 14)
         self.cell(0, 8, f'  {title}', ln=True)
-        self.set_draw_color(*Colors.PRIMARY)
+        self.set_draw_color(*Colors.SECTION_LINE)
         self.set_line_width(0.5)
         self.line(10, self.get_y() + 2, 200, self.get_y() + 2)
         self.set_line_width(0.2)
-        self.ln(8)
+        self.ln(5)
+        # 섹션 설명 추가
+        desc = SECTION_DESCRIPTIONS.get(number, '')
+        if desc:
+            self.set_font('AppleSD', '', 9)
+            self.set_text_color(*Colors.DARK)
+            self.cell(0, 5, desc, ln=True)
+            self.ln(3)
 
     def subsection_title(self, title: str):
         self.set_font('AppleSD', '', 11)
@@ -296,28 +326,26 @@ class PDFReport(FPDF):
 
     def metric_card(self, label: str, value: str, grade: str,
                     percentile: float = None, width: float = 60):
-        """지표 카드"""
+        """지표 카드 - 카테고리별 고유 색상 사용"""
         x = self.get_x()
         y = self.get_y()
 
-        # 카드 배경
-        self.set_fill_color(250, 251, 252)
+        # 카테고리 색상 결정
+        category = METRIC_TO_CATEGORY.get(label, '수익성')
+        cat_color, cat_light = CATEGORY_COLORS.get(category, (Colors.PRIMARY, Colors.PRIMARY_LIGHT))
+
+        # 카드 배경 - 카테고리 연한 색상
+        self.set_fill_color(*cat_light)
         self.rect(x, y, width, 35, 'F')
 
-        # 등급 색상 좌측 바
-        grade_colors = {
-            'A+': Colors.GRADE_A_PLUS, 'A': Colors.GRADE_A,
-            'B+': Colors.GRADE_B_PLUS, 'B': Colors.GRADE_B,
-            'C': Colors.GRADE_C, 'F': Colors.GRADE_F
-        }
-        color = grade_colors.get(grade, Colors.MUTED)
-        self.set_fill_color(*color)
+        # 카테고리 색상 좌측 바
+        self.set_fill_color(*cat_color)
         self.rect(x, y, 3, 35, 'F')
 
         # 라벨
         self.set_xy(x + 5, y + 3)
         self.set_font('AppleSD', '', 8)
-        self.set_text_color(*Colors.MUTED)
+        self.set_text_color(*cat_color)
         self.cell(width - 10, 5, label)
 
         # 값
@@ -326,16 +354,15 @@ class PDFReport(FPDF):
         self.set_text_color(*Colors.DARK)
         self.cell(width - 10, 8, value)
 
-        # 등급 뱃지
+        # 등급 텍스트 (박스 제거)
         self.set_xy(x + 5, y + 22)
-        self.set_fill_color(*color)
-        self.set_text_color(*Colors.WHITE)
-        self.set_font('AppleSD', '', 8)
-        self.cell(15, 8, grade, fill=True, align='C')
+        self.set_text_color(*Colors.DARK)
+        self.set_font('AppleSD', '', 9)
+        self.cell(20, 8, f'등급: {grade}')
 
         # 백분위
-        if percentile:
-            self.set_xy(x + 22, y + 22)
+        if percentile is not None:
+            self.set_xy(x + 27, y + 22)
             self.set_text_color(*Colors.MUTED)
             self.set_font('AppleSD', '', 8)
             pct_text = f"상위{percentile:.0f}%" if percentile <= 50 else f"하위{100-percentile:.0f}%"
@@ -723,7 +750,7 @@ class PDFReportGenerator:
 
         # 구분선
         pdf.ln(8)
-        pdf.set_draw_color(*Colors.PRIMARY)
+        pdf.set_draw_color(*Colors.SECTION_LINE)
         pdf.set_line_width(0.8)
         pdf.line(60, pdf.get_y(), 150, pdf.get_y())
         pdf.set_line_width(0.2)
@@ -932,14 +959,14 @@ class PDFReportGenerator:
             pdf.set_text_color(*Colors.WHITE)
             pdf.cell(140, 6, category)
 
-            # 등급 뱃지 (등급 색상)
-            pdf.set_fill_color(*grade_color)
+            # 등급 텍스트 (박스 없이)
             pdf.set_font('AppleSD', '', 9)
-            pdf.cell(35, 6, f'등급: {data["grade"]}', fill=True, align='C')
+            pdf.set_text_color(*Colors.WHITE)
+            pdf.cell(35, 6, f'등급: {data["grade"]}', align='C')
             pdf.ln(12)
 
-            # 재무비율 사전적 의미 (해당 카테고리 지표들)
-            metrics_list = [m for m in data['metrics'].keys() if not data['metrics'][m]['is_missing']]
+            # 재무비율 사전적 의미 (해당 카테고리의 모든 지표 - TARGET_METRICS 기준)
+            metrics_list = TARGET_METRICS.get(category, [])
             pdf.set_font('AppleSD', '', 7)
             pdf.set_text_color(*cat_color)
             for metric in metrics_list:
@@ -991,9 +1018,9 @@ class PDFReportGenerator:
 
             pdf.ln(2)
 
-            # 지표별 카드 (한 행에 2개) - 높이 늘림
+            # 지표별 카드 (한 행에 2개) - 모든 지표 표시
             card_width = 93
-            card_height = 58  # 52 -> 58 (하단 여백 확보)
+            card_height = 58
 
             for idx, metric in enumerate(metrics_list):
                 col = idx % 2
@@ -1005,15 +1032,18 @@ class PDFReportGenerator:
                         row_start_y = pdf.get_y()
 
                 x_pos = 10 + col * (card_width + 4)
-                metric_grade = data['metrics'][metric].get('grade', 'C')
-                metric_color = grade_colors.get(metric_grade, Colors.PRIMARY)
 
-                # 통합 카드 그리기
+                # 데이터 존재 여부 확인
+                metric_values = metrics_data.get(metric, [])
+                is_missing = not metric_values or all(v is None for v in metric_values)
+
+                # 통합 카드 그리기 - 카테고리 색상 사용
                 self._draw_metric_card(
-                    pdf, metric, metrics_data.get(metric, []), periods,
+                    pdf, metric, metric_values, periods,
                     trend_data.get(metric, {}), relative_data.get(metric),
-                    current_data, metric_color,
-                    x_pos, row_start_y, card_width, card_height
+                    current_data, cat_color,
+                    x_pos, row_start_y, card_width, card_height,
+                    is_missing=is_missing  # 미공시 여부 전달
                 )
 
                 # 행 끝이면 다음 줄로
@@ -1025,20 +1055,43 @@ class PDFReportGenerator:
     def _draw_metric_card(self, pdf: PDFReport, metric: str, values: List[float],
                           periods: List[str], trend: Dict, industry_rel: float,
                           current_data: Dict, color: Tuple,
-                          x: float, y: float, width: float, height: float):
+                          x: float, y: float, width: float, height: float,
+                          is_missing: bool = False):
         """통합 지표 카드 (차트 + 데이터) - 세련된 디자인"""
 
         # 카드 배경 (그림자 효과)
         pdf.set_fill_color(230, 230, 230)
         pdf.rect(x + 1, y + 1, width, height, 'F')
 
-        # 메인 카드 배경
-        pdf.set_fill_color(255, 255, 255)
+        # 메인 카드 배경 (미공시는 연한 회색)
+        if is_missing:
+            pdf.set_fill_color(248, 248, 248)
+        else:
+            pdf.set_fill_color(255, 255, 255)
         pdf.rect(x, y, width, height, 'F')
 
-        # 상단 컬러 바
-        pdf.set_fill_color(*color)
+        # 상단 컬러 바 (미공시는 회색)
+        if is_missing:
+            pdf.set_fill_color(*Colors.MUTED)
+        else:
+            pdf.set_fill_color(*color)
         pdf.rect(x, y, width, 3, 'F')
+
+        # 미공시 데이터 처리
+        if is_missing:
+            pdf.set_xy(x + 3, y + 5)
+            pdf.set_font('AppleSD', '', 9)
+            pdf.set_text_color(*Colors.MUTED)
+            pdf.cell(width - 6, 5, metric)
+
+            pdf.set_xy(x + 3, y + 20)
+            pdf.set_font('AppleSD', '', 10)
+            pdf.cell(width - 6, 5, '데이터 미공시')
+
+            pdf.set_xy(x + 3, y + 35)
+            pdf.set_font('AppleSD', '', 7)
+            pdf.multi_cell(width - 6, 4, '해당 지표의 데이터가 공시되지 않아 분석 결과를 제공할 수 없습니다.')
+            return
 
         # 지표명 헤더
         pdf.set_xy(x + 3, y + 5)
@@ -1191,12 +1244,12 @@ class PDFReportGenerator:
         metrics_info = industry_comparison.get('metrics', {}) if industry_comparison else {}
 
         # 업종 정보 헤더
-        pdf.set_fill_color(*Colors.PRIMARY_LIGHT)
+        pdf.set_fill_color(240, 240, 240)
         header_y = pdf.get_y()
         pdf.rect(10, header_y, 190, 12, 'F')
         pdf.set_xy(15, header_y + 3)
         pdf.set_font('AppleSD', '', 10)
-        pdf.set_text_color(*Colors.PRIMARY_DARK)
+        pdf.set_text_color(*Colors.DARK)
         pdf.cell(0, 6, f"비교 업종: {industry_name}")
         pdf.ln(15)
 
@@ -1229,14 +1282,14 @@ class PDFReportGenerator:
                 box_height = int(actual_lines * 4) + 10
 
                 box_y = pdf.get_y()
-                pdf.set_fill_color(245, 248, 250)
+                pdf.set_fill_color(245, 245, 245)
                 pdf.rect(10, box_y, 190, box_height, 'F')
-                pdf.set_fill_color(*Colors.PRIMARY)
+                pdf.set_fill_color(*Colors.DARK)
                 pdf.rect(10, box_y, 3, box_height, 'F')
 
                 pdf.set_xy(15, box_y + 2)
                 pdf.set_font('AppleSD', '', 7)
-                pdf.set_text_color(*Colors.PRIMARY)
+                pdf.set_text_color(*Colors.DARK)
                 pdf.cell(0, 4, 'AI 업종 비교 분석', ln=True)
 
                 pdf.set_x(15)
@@ -1257,30 +1310,38 @@ class PDFReportGenerator:
         card_width = 36
         card_x = 10
 
-        for cat, pos in category_positions.items():
-            if pos is None:
-                continue
+        # 모든 카테고리 표시 (TARGET_METRICS 기준)
+        for cat in TARGET_METRICS.keys():
+            pos = category_positions.get(cat)
+            is_missing = pos is None
 
             # 카테고리 고유 색상 사용
             cat_color, cat_light = CATEGORY_COLORS.get(cat, (Colors.PRIMARY, Colors.PRIMARY_LIGHT))
 
-            # 카드 배경
-            pdf.set_fill_color(*cat_light)
+            # 카드 배경 (미공시는 연한 회색)
+            if is_missing:
+                pdf.set_fill_color(245, 245, 245)
+            else:
+                pdf.set_fill_color(*cat_light)
             pdf.rect(card_x, card_y, card_width, 22, 'F')
-            pdf.set_fill_color(*cat_color)
+
+            if is_missing:
+                pdf.set_fill_color(*Colors.MUTED)
+            else:
+                pdf.set_fill_color(*cat_color)
             pdf.rect(card_x, card_y, card_width, 3, 'F')
 
             # 카테고리명
             pdf.set_xy(card_x + 2, card_y + 5)
             pdf.set_font('AppleSD', '', 7)
-            pdf.set_text_color(*cat_color)
+            pdf.set_text_color(*cat_color if not is_missing else Colors.MUTED)
             pdf.cell(card_width - 4, 4, cat, align='C')
 
             # 순위
             pdf.set_xy(card_x + 2, card_y + 11)
             pdf.set_font('AppleSD', '', 10)
-            pdf.set_text_color(*cat_color)
-            rank_text = f"상위 {pos:.0f}%"
+            pdf.set_text_color(*cat_color if not is_missing else Colors.MUTED)
+            rank_text = f"상위 {pos:.0f}%" if pos is not None else "미공시"
             pdf.cell(card_width - 4, 6, rank_text, align='C')
 
             card_x += card_width + 2
@@ -1300,7 +1361,7 @@ class PDFReportGenerator:
                     pdf.add_page()
 
                 cat_color, cat_light = CATEGORY_COLORS.get(category, (Colors.PRIMARY, Colors.PRIMARY_LIGHT))
-                cat_position = category_positions.get(category, 50)
+                cat_position = category_positions.get(category)
 
                 # 카테고리 헤더
                 cat_y = pdf.get_y()
@@ -1312,7 +1373,7 @@ class PDFReportGenerator:
                 pdf.cell(150, 4, category)
                 # 순위 표시
                 pdf.set_font('AppleSD', '', 8)
-                rank_text = f"상위 {cat_position:.0f}%" if cat_position else "-"
+                rank_text = f"상위 {cat_position:.0f}%" if cat_position is not None else "미공시"
                 pdf.cell(30, 4, rank_text, align='R')
                 pdf.ln(8)
 
@@ -1320,7 +1381,7 @@ class PDFReportGenerator:
                 try:
                     cat_metrics = {m: metrics_info.get(m) for m in metrics_list if metrics_info.get(m)}
                     cat_analysis = generate_category_industry_analysis(
-                        company_name, industry_name, category, cat_metrics, cat_position or 50
+                        company_name, industry_name, category, cat_metrics, cat_position if cat_position is not None else 50
                     )
                     if cat_analysis:
                         pdf.set_font('AppleSD', '', 8)
@@ -1358,54 +1419,68 @@ class PDFReportGenerator:
                 pdf.cell(33, 4, '비교', align='C')
                 pdf.ln(6)
 
-                # 데이터 행
+                # 데이터 행 - 모든 지표 표시 (미공시 포함)
                 for i, metric in enumerate(metrics_list):
-                    info = metrics_info.get(metric)
-                    if not info:
-                        continue
+                    info = metrics_info.get(metric, {})
+                    is_missing = not info or info.get('company') is None
 
                     row_y = pdf.get_y()
-                    row_color = (255, 255, 255) if i % 2 == 0 else (250, 251, 252)
+                    # 미공시는 연한 회색 배경
+                    if is_missing:
+                        row_color = (245, 245, 245)
+                    else:
+                        row_color = (255, 255, 255) if i % 2 == 0 else (250, 251, 252)
                     pdf.set_fill_color(*row_color)
                     pdf.rect(10, row_y, 190, 8, 'F')
 
-                    company_val = info.get('company')
-                    mean_val = info.get('industry_mean')
-                    pct = info.get('percentile', 50)
+                    company_val = info.get('company') if info else None
+                    mean_val = info.get('industry_mean') if info else None
+                    pct = info.get('percentile', 50) if info else None
 
-                    diff = (company_val - mean_val) if company_val and mean_val else 0
-                    diff_color = Colors.SUCCESS if diff >= 0 else Colors.DANGER
+                    diff = (company_val - mean_val) if company_val is not None and mean_val is not None else None
+                    diff_color = Colors.SUCCESS if diff is not None and diff >= 0 else Colors.DANGER if diff is not None and diff < 0 else Colors.MUTED
 
                     pdf.set_xy(10, row_y + 1.5)
                     pdf.set_font('AppleSD', '', 7)
 
-                    # 지표명 (카테고리 색상 포인트)
-                    pdf.set_fill_color(*cat_color)
+                    # 지표명 (미공시는 회색)
+                    if is_missing:
+                        pdf.set_fill_color(*Colors.MUTED)
+                    else:
+                        pdf.set_fill_color(*cat_color)
                     pdf.rect(10, row_y, 2, 8, 'F')
-                    pdf.set_text_color(*Colors.DARK)
+                    pdf.set_text_color(*Colors.DARK if not is_missing else Colors.MUTED)
                     pdf.cell(45, 5, f'  {metric}', align='L')
 
-                    # 기업값
-                    pdf.set_text_color(*Colors.DARK)
-                    val_str = f"{company_val:.1f}%" if company_val is not None else '-'
-                    pdf.cell(28, 5, val_str, align='C')
+                    if is_missing:
+                        # 미공시 표시
+                        pdf.set_text_color(*Colors.MUTED)
+                        pdf.cell(28, 5, '-', align='C')
+                        pdf.cell(28, 5, '-', align='C')
+                        pdf.cell(28, 5, '-', align='C')
+                        pdf.cell(28, 5, '미공시', align='C')
+                    else:
+                        # 기업값
+                        pdf.set_text_color(*Colors.DARK)
+                        val_str = f"{company_val:.1f}%" if company_val is not None else '-'
+                        pdf.cell(28, 5, val_str, align='C')
 
-                    # 업종평균
-                    pdf.set_text_color(*Colors.MUTED)
-                    mean_str = f"{mean_val:.1f}%" if mean_val is not None else '-'
-                    pdf.cell(28, 5, mean_str, align='C')
+                        # 업종평균
+                        pdf.set_text_color(*Colors.MUTED)
+                        mean_str = f"{mean_val:.1f}%" if mean_val is not None else '-'
+                        pdf.cell(28, 5, mean_str, align='C')
 
-                    # 차이
-                    pdf.set_text_color(*diff_color)
-                    diff_str = f"{diff:+.1f}%p" if diff else '-'
-                    pdf.cell(28, 5, diff_str, align='C')
+                        # 차이
+                        pdf.set_text_color(*diff_color)
+                        diff_str = f"{diff:+.1f}%p" if diff is not None else '-'
+                        pdf.cell(28, 5, diff_str, align='C')
 
-                    # 순위
-                    rank_color = Colors.SUCCESS if pct <= 30 else Colors.DANGER if pct >= 70 else Colors.MUTED
-                    pdf.set_text_color(*rank_color)
-                    pdf.cell(28, 5, f"상위 {pct:.0f}%", align='C')
+                        # 순위
+                        rank_color = Colors.SUCCESS if pct is not None and pct <= 30 else Colors.DANGER if pct is not None and pct >= 70 else Colors.MUTED
+                        pdf.set_text_color(*rank_color)
+                        pdf.cell(28, 5, f"상위 {pct:.0f}%" if pct is not None else '-', align='C')
 
-                    # 비교 바
+                    # 비교 바 (데이터 있을 때만)
                     bar_x = pdf.get_x() + 3
                     bar_w = 25
                     bar_h = 4
@@ -1413,9 +1488,10 @@ class PDFReportGenerator:
                     pdf.set_fill_color(*Colors.LIGHT)
                     pdf.rect(bar_x, row_y + 2, bar_w, bar_h, 'F')
 
-                    fill_w = ((100 - pct) / 100) * bar_w
-                    pdf.set_fill_color(*cat_color)
-                    pdf.rect(bar_x, row_y + 2, fill_w, bar_h, 'F')
+                    if not is_missing and pct is not None:
+                        fill_w = ((100 - pct) / 100) * bar_w
+                        pdf.set_fill_color(*cat_color)
+                        pdf.rect(bar_x, row_y + 2, fill_w, bar_h, 'F')
 
                     pdf.ln(8)
 
@@ -1477,36 +1553,55 @@ class PDFReportGenerator:
         summary = ai_pred.get('summary', {})
         all_predictions = ai_pred.get('all_predictions', {})
 
-        # 전망 요약 헤더 카드
-        outlook = summary.get('overall_outlook', 'neutral')
-        outlook_map = {'positive': '긍정적', 'negative': '부정적', 'neutral': '중립'}
-        color_map = {'positive': Colors.SUCCESS, 'negative': Colors.DANGER, 'neutral': Colors.MUTED}
-        outlook_color = color_map.get(outlook, Colors.MUTED)
+        # 미공시 지표 확인
+        all_metrics = []
+        for metrics in TARGET_METRICS.values():
+            all_metrics.extend(metrics)
+        missing_metrics = [m for m in all_metrics if not all_predictions.get(m, {}).get('predicted')]
 
-        # 전망 헤더 박스
-        header_y = pdf.get_y()
-        pdf.set_fill_color(*outlook_color)
-        pdf.rect(10, header_y, 190, 20, 'F')
+        # 미공시 데이터 면책 문구
+        if missing_metrics:
+            disclaimer_y = pdf.get_y()
+            pdf.set_fill_color(255, 248, 240)  # 연한 주황 배경
+            pdf.rect(10, disclaimer_y, 190, 12, 'F')
+            pdf.set_fill_color(*Colors.WARNING)
+            pdf.rect(10, disclaimer_y, 3, 12, 'F')
 
-        pdf.set_xy(15, header_y + 3)
-        pdf.set_font('AppleSD', '', 9)
-        pdf.set_text_color(*Colors.WHITE)
-        pdf.cell(0, 5, '다음 분기 전망')
-
-        pdf.set_xy(15, header_y + 9)
-        pdf.set_font('AppleSD', '', 14)
-        pdf.cell(40, 8, outlook_map.get(outlook, '중립'))
+            pdf.set_xy(15, disclaimer_y + 2)
+            pdf.set_font('AppleSD', '', 7)
+            pdf.set_text_color(*Colors.WARNING)
+            pdf.cell(5, 4, '⚠')
+            pdf.set_text_color(*Colors.TEXT)
+            missing_str = ', '.join(missing_metrics[:5])
+            if len(missing_metrics) > 5:
+                missing_str += f' 외 {len(missing_metrics) - 5}개'
+            pdf.multi_cell(170, 4, f'데이터 미공시 지표: {missing_str}. 일부 지표는 기업의 데이터 공시 여부에 따라 예측 결과가 제공되지 않을 수 있습니다.')
+            pdf.ln(2)
 
         # 개선/악화 카운트
         improving_count = summary.get('improving_count', 0)
         declining_count = summary.get('declining_count', 0)
         stable_count = summary.get('stable_count', 0)
 
-        pdf.set_xy(100, header_y + 5)
+        # 전망 헤더 박스 (회색 - 비교 업종과 동일)
+        header_y = pdf.get_y()
+        pdf.set_fill_color(240, 240, 240)
+        pdf.rect(10, header_y, 190, 20, 'F')
+
+        pdf.set_xy(15, header_y + 3)
         pdf.set_font('AppleSD', '', 9)
-        pdf.cell(30, 5, f'▲ 개선: {improving_count}')
-        pdf.cell(30, 5, f'▼ 악화: {declining_count}')
-        pdf.cell(30, 5, f'→ 유지: {stable_count}')
+        pdf.set_text_color(*Colors.DARK)
+        pdf.cell(0, 5, '다음 분기 전망')
+
+        # 개선/유지/악화 표시 (큰 글씨로, 아이콘 포함)
+        pdf.set_xy(15, header_y + 9)
+        pdf.set_font('AppleSD', '', 14)
+        pdf.set_text_color(*Colors.SUCCESS)
+        pdf.cell(55, 8, f'▲ 개선 {improving_count}')
+        pdf.set_text_color(*Colors.WARNING)
+        pdf.cell(55, 8, f'→ 유지 {stable_count}')
+        pdf.set_text_color(*Colors.DANGER)
+        pdf.cell(55, 8, f'▼ 악화 {declining_count}')
 
         pdf.set_y(header_y + 24)
 
@@ -1517,39 +1612,38 @@ class PDFReportGenerator:
         card_y = pdf.get_y()
 
         for category, cat_info in category_outlook.items():
-            cat_outlook = cat_info.get('outlook', 'neutral')
             cat_color, cat_light = CATEGORY_COLORS.get(category, (Colors.PRIMARY, Colors.PRIMARY_LIGHT))
 
             # 카드 배경 (카테고리 연한 색상)
             pdf.set_fill_color(*cat_light)
-            pdf.rect(card_x, card_y, card_width, 28, 'F')
+            pdf.rect(card_x, card_y, card_width, 24, 'F')
             pdf.set_fill_color(*cat_color)
             pdf.rect(card_x, card_y, card_width, 3, 'F')
 
             # 카테고리명
             pdf.set_xy(card_x + 2, card_y + 5)
-            pdf.set_font('AppleSD', '', 7)
+            pdf.set_font('AppleSD', '', 8)
             pdf.set_text_color(*cat_color)
             pdf.cell(card_width - 4, 4, category, align='C')
 
-            # 전망
-            pdf.set_xy(card_x + 2, card_y + 11)
-            pdf.set_font('AppleSD', '', 9)
-            outlook_color = color_map.get(cat_outlook, Colors.MUTED)
-            pdf.set_text_color(*outlook_color)
-            pdf.cell(card_width - 4, 5, outlook_map.get(cat_outlook, '중립'), align='C')
+            # 개선/유지/악화 (카드 안에 표시)
+            improving = cat_info.get('improving', 0)
+            declining = cat_info.get('declining', 0)
+            stable_cat = len([m for m in TARGET_METRICS.get(category, [])]) - improving - declining
 
-            # 개선/악화
-            pdf.set_xy(card_x + 2, card_y + 18)
-            pdf.set_font('AppleSD', '', 6)
+            pdf.set_xy(card_x + 2, card_y + 12)
+            pdf.set_font('AppleSD', '', 7)
+            cell_w = (card_width - 4) / 3
             pdf.set_text_color(*Colors.SUCCESS)
-            pdf.cell((card_width - 4) / 2, 4, f"▲{cat_info.get('improving', 0)}", align='C')
+            pdf.cell(cell_w, 4, f"▲{improving}", align='C')
+            pdf.set_text_color(*Colors.WARNING)
+            pdf.cell(cell_w, 4, f"→{stable_cat}", align='C')
             pdf.set_text_color(*Colors.DANGER)
-            pdf.cell((card_width - 4) / 2, 4, f"▼{cat_info.get('declining', 0)}", align='C')
+            pdf.cell(cell_w, 4, f"▼{declining}", align='C')
 
             card_x += card_width + 2
 
-        pdf.set_y(card_y + 32)
+        pdf.set_y(card_y + 28)
 
         # 카테고리별 지표 테이블 (카테고리 고유 색상)
         for category, metrics in TARGET_METRICS.items():
@@ -1569,70 +1663,110 @@ class PDFReportGenerator:
             pdf.cell(0, 4, category)
             pdf.ln(10)
 
-            # 지표 테이블
+            # 지표 테이블 (심플 그리드 스타일) - 모든 지표 표시
             for metric in metrics:
                 pred = all_predictions.get(metric, {})
-                if not pred or pred.get('current') is None:
-                    continue
+                cur = pred.get('current') if pred else None
+                prd = pred.get('predicted') if pred else None
+                change = pred.get('change', 0) if pred else None
+                direction = pred.get('direction', 'stable') if pred else 'stable'
 
-                cur = pred.get('current')
-                prd = pred.get('predicted')
-                change = pred.get('change', 0)
-                direction = pred.get('direction', 'stable')
-                confidence = pred.get('confidence', 'medium')
+                # 데이터 미공시 여부 확인
+                is_missing = (prd is None)
 
-                dir_color = Colors.SUCCESS if direction == 'improving' else Colors.DANGER if direction == 'declining' else Colors.MUTED
-                dir_icon = '▲' if direction == 'improving' else '▼' if direction == 'declining' else '→'
+                if is_missing:
+                    dir_color = Colors.MUTED
+                    dir_icon = '-'
+                else:
+                    dir_color = Colors.SUCCESS if direction == 'improving' else Colors.DANGER if direction == 'declining' else Colors.WARNING
+                    dir_icon = '▲' if direction == 'improving' else '▼' if direction == 'declining' else '→'
 
                 row_y = pdf.get_y()
+                row_h = 10
+
+                # 행 배경 (미공시는 연한 회색)
+                if is_missing:
+                    pdf.set_fill_color(245, 245, 245)
+                else:
+                    pdf.set_fill_color(250, 250, 250)
+                pdf.rect(10, row_y, 190, row_h, 'F')
+
+                # 그리드 선
+                pdf.set_draw_color(230, 230, 230)
+                pdf.rect(10, row_y, 190, row_h, 'D')
 
                 # 지표명
+                pdf.set_xy(12, row_y + 2)
                 pdf.set_font('AppleSD', '', 8)
-                pdf.set_text_color(*Colors.DARK)
-                pdf.cell(40, 8, f'  {metric}')
+                pdf.set_text_color(*Colors.DARK if not is_missing else Colors.MUTED)
+                pdf.cell(38, 6, metric)
 
-                # 현재 → 예측
+                # 구분선
+                pdf.line(50, row_y, 50, row_y + row_h)
+
+                # 현재값 (None이면 '-' 표시)
+                pdf.set_xy(52, row_y + 2)
+                pdf.set_text_color(*Colors.MUTED)
+                pdf.set_font('AppleSD', '', 7)
+                cur_str = f'현재 {cur:.1f}%' if cur is not None else '현재 -'
+                pdf.cell(30, 6, cur_str)
+
+                # 구분선
+                pdf.line(82, row_y, 82, row_y + row_h)
+
+                # 예측값 (미공시면 "미공시" 표시)
+                pdf.set_xy(84, row_y + 2)
+                pdf.set_font('AppleSD', '', 7)
+                if is_missing:
+                    pdf.set_text_color(*Colors.MUTED)
+                    pdf.cell(30, 6, '미공시')
+                else:
+                    pdf.set_text_color(*Colors.DARK)
+                    pdf.cell(30, 6, f'예측 {prd:.1f}%')
+
+                # 구분선
+                pdf.line(114, row_y, 114, row_y + row_h)
+
+                # 변화량 (색상 강조) - 데이터 없으면 '-'
+                pdf.set_xy(116, row_y + 1)
+                pdf.set_font('AppleSD', '', 9)
                 pdf.set_text_color(*dir_color)
-                pdf.cell(45, 8, f'{cur:.1f}% {dir_icon} {prd:.1f}%')
+                if not is_missing and cur is not None and change is not None:
+                    change_str = f'{dir_icon} {change:+.1f}%p'
+                else:
+                    change_str = '-'
+                    pdf.set_text_color(*Colors.MUTED)
+                pdf.cell(30, 8, change_str, align='C')
 
-                # 변화량
-                pdf.set_font('AppleSD', '', 8)
-                change_str = f'{change:+.1f}%p'
-                pdf.cell(25, 8, change_str)
+                # 구분선
+                pdf.line(146, row_y, 146, row_y + row_h)
 
-                # 신뢰도 뱃지
-                conf_colors = {'high': Colors.SUCCESS, 'medium': Colors.WARNING, 'low': Colors.DANGER}
-                conf_color = conf_colors.get(confidence, Colors.MUTED)
-                pdf.set_fill_color(*conf_color)
-                pdf.set_text_color(*Colors.WHITE)
-                pdf.set_font('AppleSD', '', 6)
-                pdf.cell(18, 8, confidence, fill=True, align='C')
-
-                # 변화 바
-                bar_x = pdf.get_x() + 5
-                bar_w = 50
-                bar_h = 4
+                # 변화 바 (오른쪽)
+                bar_x = 150
+                bar_w = 46
+                bar_h = 5
+                bar_y = row_y + 2.5
 
                 pdf.set_fill_color(*Colors.LIGHT)
-                pdf.rect(bar_x, row_y + 2, bar_w, bar_h, 'F')
+                pdf.rect(bar_x, bar_y, bar_w, bar_h, 'F')
 
-                # 변화 방향에 따른 바
-                if change != 0:
+                # 변화 방향에 따른 바 (데이터 있을 때만)
+                if not is_missing and cur is not None and change is not None and change != 0:
                     mid_x = bar_x + bar_w / 2
-                    change_w = min(abs(change) / 10 * (bar_w / 2), bar_w / 2)  # 최대 10%p를 바 절반으로
+                    change_w = min(abs(change) / 10 * (bar_w / 2), bar_w / 2)
                     pdf.set_fill_color(*dir_color)
                     if change > 0:
-                        pdf.rect(mid_x, row_y + 2, change_w, bar_h, 'F')
+                        pdf.rect(mid_x, bar_y, change_w, bar_h, 'F')
                     else:
-                        pdf.rect(mid_x - change_w, row_y + 2, change_w, bar_h, 'F')
+                        pdf.rect(mid_x - change_w, bar_y, change_w, bar_h, 'F')
 
                     # 중앙선
                     pdf.set_draw_color(*Colors.MUTED)
-                    pdf.line(mid_x, row_y + 1, mid_x, row_y + 7)
+                    pdf.line(mid_x, bar_y - 1, mid_x, bar_y + bar_h + 1)
 
-                pdf.ln(9)
+                pdf.set_y(row_y + row_h)
 
-            pdf.ln(3)
+            pdf.ln(5)
 
     # =========================================================================
     # 카테고리별 XAI + LLM 분석 (핵심 차별점)
@@ -1642,6 +1776,14 @@ class PDFReportGenerator:
         """카테고리별 XAI + LLM 분석 (개선된 디자인 + SHAP 시각화)"""
         pdf.add_page()
         pdf.section_header('5', 'XAI 분석 (AI 예측 근거)')
+
+        all_predictions = ai_pred.get('all_predictions', {})
+
+        # 미공시 지표 확인
+        all_metrics = []
+        for metrics in TARGET_METRICS.values():
+            all_metrics.extend(metrics)
+        missing_metrics = [m for m in all_metrics if not all_predictions.get(m, {}).get('predicted')]
 
         # 헤더 설명 박스
         header_y = pdf.get_y()
@@ -1659,7 +1801,23 @@ class PDFReportGenerator:
         pdf.set_font('AppleSD', '', 7)
         pdf.set_text_color(*Colors.TEXT)
         pdf.multi_cell(180, 4, "AI 모델이 예측할 때 어떤 요인이 얼마나 기여했는지 수치화한 결과입니다. 양수(+)는 예측값 상승, 음수(-)는 하락에 기여합니다.")
-        pdf.ln(4)
+        pdf.ln(2)
+
+        # 미공시 데이터 면책 문구
+        if missing_metrics:
+            disclaimer_y = pdf.get_y()
+            pdf.set_fill_color(255, 248, 240)
+            pdf.rect(10, disclaimer_y, 190, 10, 'F')
+            pdf.set_fill_color(*Colors.WARNING)
+            pdf.rect(10, disclaimer_y, 3, 10, 'F')
+
+            pdf.set_xy(15, disclaimer_y + 2)
+            pdf.set_font('AppleSD', '', 7)
+            pdf.set_text_color(*Colors.WARNING)
+            pdf.cell(5, 4, '⚠')
+            pdf.set_text_color(*Colors.TEXT)
+            pdf.cell(170, 4, f'일부 지표({len(missing_metrics)}개)는 데이터 미공시로 XAI 분석 결과가 제공되지 않습니다.')
+            pdf.ln(4)
 
         outlook_colors = {
             'positive': Colors.SUCCESS,
@@ -1729,27 +1887,31 @@ class PDFReportGenerator:
                     pdf.multi_cell(184, 5, msg)
                 pdf.ln(2)
 
-            # 지표별 상세 분석 (카드 형태)
+            # 지표별 상세 분석 (카드 형태) - 모든 지표 표시
             metrics_analysis = analysis.get('metrics', {})
             all_predictions = ai_pred.get('all_predictions', {})
 
-            for metric, metric_data in metrics_analysis.items():
+            # TARGET_METRICS에서 해당 카테고리의 모든 지표 순회
+            for metric in TARGET_METRICS.get(category, []):
+                metric_data = metrics_analysis.get(metric, {})
                 # 카드 높이(58) + 여유 공간 확보
                 if pdf.get_y() > 210:
                     pdf.add_page()
 
                 pred = all_predictions.get(metric, {})
-                cur = pred.get('current')
-                prd = pred.get('predicted')
-                direction = pred.get('direction', 'stable')
-                confidence = pred.get('confidence', 'medium')
-                shap_analysis = pred.get('shap_analysis', {})
+                cur = pred.get('current') if pred else None
+                prd = pred.get('predicted') if pred else None
+                direction = pred.get('direction', 'stable') if pred else 'stable'
+                shap_analysis = pred.get('shap_analysis', {}) if pred else {}
 
-                if cur is None or prd is None:
-                    continue
+                # 데이터 미공시 여부
+                is_missing = (prd is None)
 
                 # 방향 색상
-                if direction == 'improving':
+                if is_missing:
+                    dir_color = Colors.MUTED
+                    dir_icon = '-'
+                elif direction == 'improving':
                     dir_color = Colors.SUCCESS
                     dir_icon = '▲'
                 elif direction == 'declining':
@@ -1759,53 +1921,54 @@ class PDFReportGenerator:
                     dir_color = Colors.MUTED
                     dir_icon = '→'
 
-                # 지표 카드 (확장된 높이)
+                # 지표 카드 높이 (미공시면 작게)
                 card_y = pdf.get_y()
-                card_height = 58
-                pdf.set_fill_color(255, 255, 255)
+                card_height = 25 if is_missing else 72  # 미공시는 간단하게
+                pdf.set_fill_color(255, 255, 255) if not is_missing else pdf.set_fill_color(250, 250, 250)
                 pdf.rect(10, card_y, 190, card_height, 'F')
-                pdf.set_fill_color(*dir_color)
+                pdf.set_fill_color(*cat_color if not is_missing else Colors.MUTED)
                 pdf.rect(10, card_y, 3, card_height, 'F')
 
                 # 지표명 + 예측값
                 pdf.set_xy(15, card_y + 2)
                 pdf.set_font('AppleSD', '', 10)
-                pdf.set_text_color(*Colors.DARK)
+                pdf.set_text_color(*cat_color if not is_missing else Colors.MUTED)
                 pdf.cell(40, 6, metric)
 
-                pdf.set_text_color(*dir_color)
-                pdf.set_font('AppleSD', '', 11)
-                pdf.cell(50, 6, f'{dir_icon} {cur:.1f}% → {prd:.1f}%')
-
-                # 신뢰도 뱃지 + R² 값
-                conf_colors = {'high': Colors.SUCCESS, 'medium': Colors.WARNING, 'low': Colors.DANGER}
-                conf_color = conf_colors.get(confidence, Colors.MUTED)
-                r2 = pred.get('r2', 0)
-
-                pdf.set_fill_color(*conf_color)
-                pdf.set_text_color(*Colors.WHITE)
-                pdf.set_font('AppleSD', '', 6)
-                pdf.cell(25, 6, f'{confidence} (R²={r2:.2f})', fill=True, align='C')
-
-                # LLM 인사이트
-                insight = metric_data.get('insight', '')
-                if insight:
-                    pdf.set_xy(15, card_y + 10)
+                if is_missing:
+                    # 미공시 표시
+                    pdf.set_text_color(*Colors.MUTED)
+                    pdf.set_font('AppleSD', '', 9)
+                    pdf.cell(80, 6, '데이터 미공시')
+                    pdf.set_xy(15, card_y + 12)
                     pdf.set_font('AppleSD', '', 7)
-                    pdf.set_text_color(*Colors.TEXT)
-                    pdf.multi_cell(180, 4, insight[:120])
+                    pdf.set_text_color(*Colors.MUTED)
+                    pdf.cell(180, 4, '해당 지표의 데이터가 공시되지 않아 예측 결과를 제공할 수 없습니다.')
+                else:
+                    pdf.set_text_color(*dir_color)
+                    pdf.set_font('AppleSD', '', 11)
+                    cur_str = f'{cur:.1f}%' if cur is not None else '-'
+                    pdf.cell(80, 6, f'{dir_icon} {cur_str} → {prd:.1f}%')
 
-                # SHAP Waterfall Chart
-                factors = metric_data.get('factors', {})
-                pos_factors = factors.get('positive', [])[:3]
-                neg_factors = factors.get('negative', [])[:3]
-                base_value = shap_analysis.get('base_value', cur) if shap_analysis else cur
+                    # LLM 인사이트
+                    insight = metric_data.get('insight', '')
+                    if insight:
+                        pdf.set_xy(15, card_y + 10)
+                        pdf.set_font('AppleSD', '', 7)
+                        pdf.set_text_color(*Colors.TEXT)
+                        pdf.multi_cell(180, 4, insight[:150])
 
-                # Waterfall 또는 바 차트 (base_value 유무에 따라)
-                if base_value and pos_factors or neg_factors:
-                    self._draw_shap_waterfall(pdf, base_value, prd,
-                                              pos_factors, neg_factors,
-                                              15, card_y + 22, 180, 34)
+                    # SHAP Waterfall Chart (top/bottom 5개)
+                    # shap_analysis에서 직접 가져옴 (예측 결과에서)
+                    pos_factors = shap_analysis.get('positive_factors', [])[:5] if shap_analysis else []
+                    neg_factors = shap_analysis.get('negative_factors', [])[:5] if shap_analysis else []
+                    base_value = shap_analysis.get('base_value', cur) if shap_analysis else cur
+
+                    # Waterfall 또는 바 차트 (SHAP 데이터 있을 때)
+                    if base_value is not None and (pos_factors or neg_factors):
+                        self._draw_shap_waterfall(pdf, base_value, prd,
+                                                  pos_factors, neg_factors,
+                                                  15, card_y + 22, 180, 48, cat_color)
 
                 pdf.set_y(card_y + card_height + 3)
 
@@ -1813,13 +1976,16 @@ class PDFReportGenerator:
 
     def _draw_shap_waterfall(self, pdf: PDFReport, base_value: float, predicted: float,
                               pos_factors: List, neg_factors: List,
-                              x: float, y: float, width: float, height: float):
+                              x: float, y: float, width: float, height: float,
+                              cat_color: Tuple = None):
         """SHAP Waterfall Chart - base_value에서 예측값까지의 누적 차트"""
-        # 모든 요인 합치기 (양수 먼저, 음수 나중)
+        cat_color = cat_color or Colors.PRIMARY
+
+        # 모든 요인 합치기 (양수 먼저, 음수 나중) - 5개씩
         all_factors = []
-        for f in pos_factors[:3]:
+        for f in pos_factors[:5]:
             all_factors.append((f.get('feature', ''), f.get('shap_value', 0)))
-        for f in neg_factors[:3]:
+        for f in neg_factors[:5]:
             all_factors.append((f.get('feature', ''), f.get('shap_value', 0)))
 
         if not all_factors:
