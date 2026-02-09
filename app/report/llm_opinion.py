@@ -710,6 +710,320 @@ class LLMOpinionGenerator:
 
         return result
 
+    # =========================================================================
+    # 통합 종합의견 생성 (신규)
+    # =========================================================================
+    def generate_unified(self, opinion_data: Dict) -> Dict:
+        """
+        통합 종합의견 생성 (내러티브 구조)
+
+        전문가/비전문가 분리 없이 하나의 통합된 스토리라인으로
+        기업의 재무 상태를 종합 분석합니다.
+
+        Args:
+            opinion_data: report_generator에서 준비한 LLM용 데이터
+                - company: 기업 기본 정보
+                - grades: 등급 요약
+                - current_metrics: 현재 지표값
+                - relative_metrics: 업종 대비 상대값
+                - trend: 추세 요약
+                - prediction: AI 예측 요약
+                - risk_signals: 리스크 시그널
+                - shap_analysis: SHAP 분석 결과
+                - industry_position: 업종 내 위치 (신규)
+                - time_analysis: 시계열 분석 요약 (신규)
+
+        Returns:
+            Dict: 통합 종합의견
+                - headline: 한줄 요약
+                - analysis: 현황 분석
+                - trend: 추세 분석
+                - forecast: AI 전망
+                - watch_points: 주시 포인트 (리스트)
+                - conclusion: 결론
+                - raw_response: 원본 응답
+        """
+        prompt = self._build_unified_prompt(opinion_data)
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": self._get_unified_system_prompt()
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0.7,
+                max_tokens=2500,
+            )
+
+            content = response.choices[0].message.content
+            return self._parse_unified_response(content, opinion_data)
+
+        except Exception as e:
+            return self._generate_unified_fallback(opinion_data, str(e))
+
+    def _get_unified_system_prompt(self) -> str:
+        """통합 종합의견용 시스템 프롬프트"""
+        return """당신은 한국 상장기업 재무 분석 리포트 작성 전문가입니다.
+
+주어진 데이터를 바탕으로 하나의 통합된 분석 리포트를 작성합니다.
+
+**작성 원칙:**
+- 전문가와 일반인 모두 이해할 수 있는 명확한 톤
+- 숫자는 반드시 맥락과 함께 제시 (예: "ROA 5.2%로 업종 상위 20%")
+- 단순 나열이 아닌 인과관계와 스토리로 연결
+- 구체적이고 actionable한 인사이트 제공
+- 지나친 긍정/부정 편향 없이 균형 잡힌 시각
+
+**응답 형식 (반드시 준수):**
+
+[한줄요약]
+기업의 현재 재무 상태와 핵심 포인트를 한 문장으로 요약합니다.
+(예: "OO기업은 B+ 등급으로 업종 상위 25%의 우량 기업이나, 수익성 하락 추세에 주의가 필요합니다.")
+
+[현황분석]
+현재 재무 상태를 분석합니다. 3~4문장으로 작성합니다.
+- 종합 등급과 업종 내 위치
+- 5개 카테고리(수익성/안정성/차입금/유동성/현금흐름) 중 강점과 약점
+- 주요 지표의 업종 대비 수준
+
+[추세분석]
+최근 변화 흐름을 분석합니다. 2~3문장으로 작성합니다.
+- 최근 4분기 동안의 개선/악화 추세
+- 주요 변화 지표와 그 원인 추정
+- 추세의 의미와 시사점
+
+[AI전망]
+AI 예측 결과와 근거를 설명합니다. 2~3문장으로 작성합니다.
+- 다음 분기 예측 방향 (개선/악화/유지)
+- SHAP 분석 기반 주요 영향 요인 (자연어로 설명)
+- 예측의 신뢰도와 해석 시 주의점
+
+[주시포인트]
+모니터링이 필요한 항목을 제시합니다. 3개 항목으로 작성합니다.
+• (리스크 또는 주의 필요 사항)
+• (기회 요인 또는 강점 유지 포인트)
+• (향후 확인이 필요한 지표)
+
+[결론]
+종합 평가를 2문장으로 마무리합니다.
+투자나 의사결정에 참고할 수 있는 균형 잡힌 결론을 제시합니다.
+"""
+
+    def _build_unified_prompt(self, data: Dict) -> str:
+        """통합 종합의견용 프롬프트 생성"""
+        company = data.get('company', {})
+        grades = data.get('grades', {})
+        current = data.get('current_metrics', {})
+        relative = data.get('relative_metrics', {})
+        trend = data.get('trend', {})
+        prediction = data.get('prediction', {})
+        risk_signals = data.get('risk_signals', [])
+        shap_analysis = data.get('shap_analysis', {})
+        industry_pos = data.get('industry_position', {})
+        time_analysis = data.get('time_analysis', {})
+
+        prompt = f"""다음 기업의 재무 상태를 종합 분석하여 통합 리포트를 작성해주세요.
+
+## 기업 정보
+- 기업명: {company.get('name', 'N/A')}
+- 업종: {company.get('industry', 'N/A')}
+- 시장: {company.get('market', 'N/A')}
+- 기준일: {company.get('period', 'N/A')}
+
+## 종합 등급
+- 등급: {grades.get('overall', 'N/A')}
+- 점수: {grades.get('score', 'N/A'):.2f}/6.00점
+- 강점 지표: {', '.join(grades.get('strengths', [])) or '없음'}
+- 약점 지표: {', '.join(grades.get('weaknesses', [])) or '없음'}
+
+## 업종 내 위치
+"""
+        # 업종 내 위치 정보 추가
+        if industry_pos:
+            overall_pct = industry_pos.get('overall_percentile')
+            if overall_pct:
+                pos_text = f"상위 {overall_pct:.0f}%" if overall_pct <= 50 else f"하위 {100-overall_pct:.0f}%"
+                prompt += f"- 종합 순위: {pos_text}\n"
+
+            cat_pcts = industry_pos.get('category_percentiles', {})
+            for cat, pct in cat_pcts.items():
+                if pct is not None:
+                    pos_text = f"상위 {pct:.0f}%" if pct <= 50 else f"하위 {100-pct:.0f}%"
+                    prompt += f"- {cat}: {pos_text}\n"
+        else:
+            prompt += "- (업종 내 위치 데이터 없음)\n"
+
+        # 현재 주요 지표
+        prompt += "\n## 현재 주요 지표 (업종 대비)\n"
+        key_metrics = ['ROA', 'ROE', '매출액영업이익률', '부채비율', '자기자본비율',
+                       '유동비율', '당좌비율', 'CFO_자산비율']
+        for metric in key_metrics:
+            value = current.get(metric)
+            rel = relative.get(metric)
+            if value is not None:
+                rel_str = f" (업종 대비 {rel:+.1f}%p)" if rel is not None else ""
+                prompt += f"- {metric}: {value:.2f}%{rel_str}\n"
+
+        # 추세 분석
+        prompt += "\n## 추세 분석 (최근 4분기)\n"
+        if time_analysis:
+            summary = time_analysis.get('summary', '')
+            if summary:
+                prompt += f"- 요약: {summary}\n"
+            key_changes = time_analysis.get('key_changes', [])
+            for change in key_changes[:3]:
+                prompt += f"- {change}\n"
+        else:
+            # 기존 trend 데이터 사용
+            improving = []
+            declining = []
+            for metric in key_metrics:
+                t = trend.get(metric, {})
+                yoy = t.get('yoy')
+                mom = t.get('mom')
+                if yoy is not None and mom is not None:
+                    if yoy > 0 and mom > 0:
+                        improving.append(metric)
+                    elif yoy < 0 and mom < 0:
+                        declining.append(metric)
+            if improving:
+                prompt += f"- 개선 추세: {', '.join(improving)}\n"
+            if declining:
+                prompt += f"- 악화 추세: {', '.join(declining)}\n"
+
+        # AI 예측
+        prompt += f"""
+## AI 예측 (다음 분기)
+- 전체 전망: {prediction.get('outlook', 'N/A')}
+- 개선 예측 지표: {', '.join(prediction.get('improving', [])) or '없음'}
+- 악화 예측 지표: {', '.join(prediction.get('declining', [])) or '없음'}
+"""
+
+        # SHAP 분석 요약 (핵심만)
+        if shap_analysis:
+            prompt += "\n## AI 예측 근거 (SHAP 분석)\n"
+
+            # 주요 지표의 SHAP 요약
+            for metric in ['ROA', 'ROE', '부채비율', '유동비율']:
+                analysis = shap_analysis.get(metric)
+                if not analysis:
+                    continue
+
+                pos_factors = analysis.get('positive_factors', [])[:2]
+                neg_factors = analysis.get('negative_factors', [])[:2]
+
+                if pos_factors or neg_factors:
+                    prompt += f"\n### {metric}\n"
+                    for f in pos_factors:
+                        desc = f.get('description', f.get('feature', ''))
+                        prompt += f"  ↑ {desc}\n"
+                    for f in neg_factors:
+                        desc = f.get('description', f.get('feature', ''))
+                        prompt += f"  ↓ {desc}\n"
+
+        # 리스크 시그널
+        if risk_signals:
+            prompt += "\n## 리스크 시그널\n"
+            for signal in risk_signals[:3]:
+                severity = "⚠️ 높음" if signal.get('severity') == 'high' else "⚡ 중간"
+                prompt += f"- {severity}: {signal.get('message', '')}\n"
+
+        prompt += """
+## 요청사항
+위 데이터를 바탕으로 통합 종합의견을 작성해주세요.
+응답 형식([한줄요약], [현황분석], [추세분석], [AI전망], [주시포인트], [결론])을 반드시 준수해주세요.
+"""
+        return prompt
+
+    def _parse_unified_response(self, content: str, opinion_data: Dict) -> Dict:
+        """통합 종합의견 응답 파싱"""
+        result = {
+            'headline': '',
+            'analysis': '',
+            'trend': '',
+            'forecast': '',
+            'watch_points': [],
+            'conclusion': '',
+            'raw_response': content,
+        }
+
+        sections = content.split('[')
+
+        for section in sections:
+            section = section.strip()
+
+            if section.startswith('한줄요약]'):
+                text = section.replace('한줄요약]', '').strip()
+                # 다음 섹션 시작 전까지
+                if '\n\n' in text:
+                    text = text.split('\n\n')[0]
+                result['headline'] = text.strip()
+
+            elif section.startswith('현황분석]'):
+                text = section.replace('현황분석]', '').strip()
+                if '\n\n[' in text:
+                    text = text.split('\n\n[')[0]
+                result['analysis'] = text.strip()
+
+            elif section.startswith('추세분석]'):
+                text = section.replace('추세분석]', '').strip()
+                if '\n\n[' in text:
+                    text = text.split('\n\n[')[0]
+                result['trend'] = text.strip()
+
+            elif section.startswith('AI전망]'):
+                text = section.replace('AI전망]', '').strip()
+                if '\n\n[' in text:
+                    text = text.split('\n\n[')[0]
+                result['forecast'] = text.strip()
+
+            elif section.startswith('주시포인트]'):
+                text = section.replace('주시포인트]', '').strip()
+                points = []
+                for line in text.split('\n'):
+                    line = line.strip()
+                    if line.startswith('•') or line.startswith('-') or line.startswith('*'):
+                        point = line.lstrip('•-* ').strip()
+                        if point:
+                            points.append(point)
+                result['watch_points'] = points[:3]
+
+            elif section.startswith('결론]'):
+                text = section.replace('결론]', '').strip()
+                # 끝까지 또는 다음 섹션까지
+                if '\n\n[' in text:
+                    text = text.split('\n\n[')[0]
+                result['conclusion'] = text.strip()
+
+        return result
+
+    def _generate_unified_fallback(self, opinion_data: Dict, error: str) -> Dict:
+        """통합 종합의견 폴백 생성"""
+        company = opinion_data.get('company', {})
+        grades = opinion_data.get('grades', {})
+
+        name = company.get('name', '해당 기업')
+        grade = grades.get('overall', 'N/A')
+        score = grades.get('score', 0)
+
+        return {
+            'headline': f"{name}은(는) {grade} 등급으로 평가되었습니다.",
+            'analysis': f"종합 점수 {score:.2f}점을 기록하였습니다. 상세 분석을 위해 개별 지표를 확인해주세요.",
+            'trend': "추세 분석 데이터를 확인해주세요.",
+            'forecast': "AI 예측 결과를 확인해주세요.",
+            'watch_points': ["개별 지표 추이 모니터링", "업종 평균 대비 변화 확인", "리스크 시그널 점검"],
+            'conclusion': "상세한 분석을 위해 보고서의 다른 섹션을 참고해주세요.",
+            'error': error,
+            'raw_response': '',
+        }
+
 
 # =============================================================================
 # 싱글톤 패턴
@@ -734,7 +1048,7 @@ def get_llm_generator() -> LLMOpinionGenerator:
 
 def generate_opinion(opinion_data: Dict) -> Dict:
     """
-    종합 의견 생성 편의 함수
+    종합 의견 생성 편의 함수 (기존 버전 - 전문가/비전문가 분리)
 
     Args:
         opinion_data: report_generator에서 준비한 LLM용 데이터
@@ -750,6 +1064,45 @@ def generate_opinion(opinion_data: Dict) -> Dict:
     """
     generator = get_llm_generator()
     return generator.generate(opinion_data)
+
+
+def generate_unified_opinion(opinion_data: Dict) -> Dict:
+    """
+    통합 종합의견 생성 편의 함수 (신규 버전 - 내러티브 구조)
+
+    전문가/비전문가 분리 없이 하나의 통합된 스토리라인으로
+    기업의 재무 상태를 종합 분석합니다.
+
+    Args:
+        opinion_data: report_generator에서 준비한 LLM용 데이터
+            - company: 기업 기본 정보
+            - grades: 등급 요약
+            - current_metrics: 현재 지표값
+            - relative_metrics: 업종 대비 상대값
+            - trend: 추세 요약
+            - prediction: AI 예측 요약
+            - risk_signals: 리스크 시그널
+            - shap_analysis: SHAP 분석 결과
+            - industry_position: 업종 내 위치 (선택)
+            - time_analysis: 시계열 분석 요약 (선택)
+
+    Returns:
+        Dict: 통합 종합의견
+            - headline: 한줄 요약
+            - analysis: 현황 분석
+            - trend: 추세 분석
+            - forecast: AI 전망
+            - watch_points: 주시 포인트 (리스트)
+            - conclusion: 결론
+
+    사용 예시:
+        from report.llm_opinion import generate_unified_opinion
+        opinion = generate_unified_opinion(report['opinion_data'])
+        print(opinion['headline'])
+        print(opinion['analysis'])
+    """
+    generator = get_llm_generator()
+    return generator.generate_unified(opinion_data)
 
 
 def generate_category_analysis(opinion_data: Dict, predictions: Dict) -> Dict:

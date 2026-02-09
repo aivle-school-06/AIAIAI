@@ -176,8 +176,11 @@ class AsyncPDFService:
         shap_data = self._extract_shap_data(report_data)
         opinion_data['shap_analysis'] = shap_data
 
-        # 1. 종합 의견
+        # 1. 종합 의견 (기존 형식 - 폴백용)
         tasks['opinion'] = self._generate_opinion(opinion_data)
+
+        # 1-1. 통합 종합의견 (새 내러티브 구조 - 메인)
+        tasks['unified_opinion'] = self._generate_unified_opinion(opinion_data)
 
         # 2. 카테고리별 분석 (5개)
         for category, metrics in TARGET_METRICS.items():
@@ -366,6 +369,151 @@ class AsyncPDFService:
                 ]
             elif section.startswith('주의 사항]'):
                 result['risk_summary'] = section.replace('주의 사항]', '').strip()
+
+        return result
+
+    async def _generate_unified_opinion(self, opinion_data: Dict) -> Dict:
+        """통합 종합의견 생성 (내러티브 구조)"""
+        system_prompt = """당신은 한국 상장기업 재무 분석 리포트 작성 전문가입니다.
+
+주어진 데이터를 바탕으로 하나의 통합된 분석 리포트를 작성합니다.
+
+**작성 원칙:**
+- 전문가와 일반인 모두 이해할 수 있는 명확한 톤
+- 숫자는 반드시 맥락과 함께 제시 (예: "ROA 5.2%로 업종 상위 20%")
+- 단순 나열이 아닌 인과관계와 스토리로 연결
+- 구체적이고 actionable한 인사이트 제공
+
+**응답 형식 (반드시 준수):**
+
+[한줄요약]
+기업의 현재 재무 상태와 핵심 포인트를 한 문장으로 요약합니다.
+
+[현황분석]
+현재 재무 상태를 분석합니다. 3~4문장으로 작성합니다.
+
+[추세분석]
+최근 추세를 분석합니다. 2~3문장으로 작성합니다.
+
+[AI전망]
+AI 예측 기반 전망을 설명합니다. SHAP 요인을 활용하여 왜 그런 예측인지 설명합니다. 3~4문장.
+
+[주시포인트]
+• 포인트1
+• 포인트2
+• 포인트3
+
+[결론]
+종합 결론을 1~2문장으로 작성합니다.
+"""
+
+        user_prompt = self._build_unified_prompt(opinion_data)
+        content = await self.llm.call(system_prompt, user_prompt, max_tokens=2500)
+        return self._parse_unified_response(content, opinion_data)
+
+    def _build_unified_prompt(self, data: Dict) -> str:
+        """통합 종합의견 프롬프트 생성"""
+        company = data.get('company', {})
+        grades = data.get('grades', {})
+        current = data.get('current_metrics', {})
+        prediction = data.get('prediction', {})
+        industry_position = data.get('industry_position', {})
+        time_analysis = data.get('time_analysis', {})
+
+        prompt = f"""기업 재무 상태 분석:
+
+## 기업 정보
+- 기업명: {company.get('name', 'N/A')}
+- 업종: {company.get('industry', 'N/A')}
+- 기준일: {company.get('period', 'N/A')}
+
+## 종합 등급: {grades.get('overall', 'N/A')} (점수: {grades.get('score', 'N/A')})
+- 강점: {', '.join(grades.get('strengths', [])) or '없음'}
+- 약점: {', '.join(grades.get('weaknesses', [])) or '없음'}
+
+## 업종 내 위치
+- 종합 백분위: 상위 {industry_position.get('overall_percentile', 50):.0f}%
+"""
+        # 카테고리별 백분위
+        cat_percentiles = industry_position.get('category_percentiles', {})
+        for cat, pct in cat_percentiles.items():
+            if pct is not None:
+                prompt += f"- {cat}: 상위 {pct:.0f}%\n"
+
+        prompt += "\n## 주요 지표\n"
+        for metric in ['ROA', 'ROE', '매출액영업이익률', '부채비율', '유동비율']:
+            value = current.get(metric)
+            if value is not None:
+                prompt += f"- {metric}: {value:.2f}%\n"
+
+        prompt += f"""
+## 시계열 분석 요약
+{time_analysis.get('summary', '데이터 없음')}
+
+## AI 예측
+- 전망: {prediction.get('outlook', 'N/A')}
+- 개선 예측: {', '.join(prediction.get('improving', [])) or '없음'}
+- 악화 예측: {', '.join(prediction.get('declining', [])) or '없음'}
+"""
+
+        # SHAP 분석 요약 추가
+        shap_analysis = data.get('shap_analysis', {})
+        if shap_analysis:
+            main_metrics = ['ROA', 'ROE', '매출액영업이익률']
+            prompt += "\n## AI 예측 핵심 요인 (SHAP 분석)\n"
+            for metric in main_metrics:
+                if metric in shap_analysis:
+                    shap = shap_analysis[metric]
+                    pos = shap.get('positive_factors', [])[:3]
+                    neg = shap.get('negative_factors', [])[:3]
+                    if pos or neg:
+                        prompt += f"\n### {metric}\n"
+                        if pos:
+                            factors = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in pos])
+                            prompt += f"- 상승 요인: {factors}\n"
+                        if neg:
+                            factors = ', '.join([f"{f.get('description', f['feature'])}({f.get('shap_value', 0):+.2f})" for f in neg])
+                            prompt += f"- 하락 요인: {factors}\n"
+
+        return prompt
+
+    def _parse_unified_response(self, content: str, opinion_data: Dict) -> Dict:
+        """통합 종합의견 응답 파싱"""
+        result = {
+            'headline': '',
+            'analysis': '',
+            'trend': '',
+            'forecast': '',
+            'watch_points': [],
+            'conclusion': '',
+            'raw_response': content
+        }
+
+        sections = content.split('[')
+        for section in sections:
+            if section.startswith('한줄요약]'):
+                result['headline'] = section.replace('한줄요약]', '').strip().split('\n\n')[0]
+            elif section.startswith('현황분석]'):
+                result['analysis'] = section.replace('현황분석]', '').strip().split('\n\n')[0]
+            elif section.startswith('추세분석]'):
+                result['trend'] = section.replace('추세분석]', '').strip().split('\n\n')[0]
+            elif section.startswith('AI전망]'):
+                result['forecast'] = section.replace('AI전망]', '').strip().split('\n\n')[0]
+            elif section.startswith('주시포인트]'):
+                text = section.replace('주시포인트]', '').strip()
+                result['watch_points'] = [
+                    line.lstrip('•-').strip()
+                    for line in text.split('\n')
+                    if line.strip().startswith(('•', '-'))
+                ][:5]
+            elif section.startswith('결론]'):
+                result['conclusion'] = section.replace('결론]', '').strip().split('\n\n')[0]
+
+        # Fallback
+        if not result['headline']:
+            grades = opinion_data.get('grades', {})
+            company = opinion_data.get('company', {})
+            result['headline'] = f"{company.get('name', '기업')}은 종합 {grades.get('overall', 'N/A')} 등급입니다."
 
         return result
 
@@ -625,6 +773,7 @@ AI 예측 분석 시, SHAP 요인을 바탕으로 '왜' 그런 예측이 나왔�
         # pdf_generator 모듈에서 직접 사용하는 함수들을 저장
         original_funcs = {
             'generate_opinion': pdf_gen_module.generate_opinion,
+            'generate_unified_opinion': pdf_gen_module.generate_unified_opinion,
             'generate_category_analysis': pdf_gen_module.generate_category_analysis,
             'generate_timeseries_analysis': pdf_gen_module.generate_timeseries_analysis,
             'generate_industry_comparison_analysis': pdf_gen_module.generate_industry_comparison_analysis,
@@ -640,6 +789,14 @@ AI 예측 분석 시, SHAP 요인을 바탕으로 '왜' 그런 예측이 나왔�
                     return result
                 logger.debug("Cache miss: opinion")
                 return original_funcs['generate_opinion'](*args, **kwargs)
+
+            def cached_unified_opinion(*args, **kwargs):
+                result = llm_results.get('unified_opinion')
+                if result:
+                    logger.debug("Using cached unified_opinion")
+                    return result
+                logger.debug("Cache miss: unified_opinion")
+                return original_funcs['generate_unified_opinion'](*args, **kwargs)
 
             def cached_category_analysis(*args, **kwargs):
                 result = self._merge_category_results(llm_results)
@@ -675,6 +832,7 @@ AI 예측 분석 시, SHAP 요인을 바탕으로 '왜' 그런 예측이 나왔�
 
             # pdf_generator 모듈의 함수들을 캐시 버전으로 교체
             pdf_gen_module.generate_opinion = cached_opinion
+            pdf_gen_module.generate_unified_opinion = cached_unified_opinion
             pdf_gen_module.generate_category_analysis = cached_category_analysis
             pdf_gen_module.generate_timeseries_analysis = cached_timeseries
             pdf_gen_module.generate_industry_comparison_analysis = cached_industry_comp
@@ -688,6 +846,7 @@ AI 예측 분석 시, SHAP 요인을 바탕으로 '왜' 그런 예측이 나왔�
         finally:
             # 원본 함수 복원
             pdf_gen_module.generate_opinion = original_funcs['generate_opinion']
+            pdf_gen_module.generate_unified_opinion = original_funcs['generate_unified_opinion']
             pdf_gen_module.generate_category_analysis = original_funcs['generate_category_analysis']
             pdf_gen_module.generate_timeseries_analysis = original_funcs['generate_timeseries_analysis']
             pdf_gen_module.generate_industry_comparison_analysis = original_funcs['generate_industry_comparison_analysis']

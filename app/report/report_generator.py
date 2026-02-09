@@ -701,6 +701,12 @@ class ReportGenerator:
 
             # 리스크 시그널
             'risk_signals': predictions.get('risk_signals', []),
+
+            # 업종 내 위치 (신규)
+            'industry_position': self._get_industry_position(grades),
+
+            # 시계열 분석 요약 (신규)
+            'time_analysis': self._get_time_analysis(company_data, grades),
         }
 
     def _flatten_current(self, current: Dict) -> Dict:
@@ -740,6 +746,128 @@ class ReportGenerator:
                 'mom': data.get('mom'),
             }
         return result
+
+    def _get_industry_position(self, grades: Dict) -> Dict:
+        """
+        업종 내 위치 정보 추출 (내부 메서드)
+
+        등급 정보에서 업종 내 백분위를 추출하여
+        종합 및 카테고리별 업종 내 위치 정보 생성
+
+        Args:
+            grades: 등급 정보 딕셔너리
+
+        Returns:
+            Dict: 업종 내 위치 정보
+                - overall_percentile: 종합 백분위
+                - category_percentiles: 카테고리별 백분위
+        """
+        # 종합 백분위: 모든 지표 백분위의 평균
+        all_percentiles = []
+        for metric, info in grades.get('metrics', {}).items():
+            pct = info.get('percentile')
+            if pct is not None:
+                all_percentiles.append(pct)
+
+        overall_pct = sum(all_percentiles) / len(all_percentiles) if all_percentiles else None
+
+        # 카테고리별 백분위
+        category_pcts = {}
+        for category, cat_info in grades.get('categories', {}).items():
+            cat_metrics = cat_info.get('metrics', {})
+            cat_percentiles = []
+            for metric, metric_info in cat_metrics.items():
+                pct = metric_info.get('percentile')
+                if pct is not None:
+                    cat_percentiles.append(pct)
+
+            if cat_percentiles:
+                category_pcts[category] = sum(cat_percentiles) / len(cat_percentiles)
+            else:
+                category_pcts[category] = None
+
+        return {
+            'overall_percentile': overall_pct,
+            'category_percentiles': category_pcts,
+        }
+
+    def _get_time_analysis(self, company_data: Dict, grades: Dict) -> Dict:
+        """
+        시계열 분석 요약 (내부 메서드)
+
+        최근 4분기 데이터를 분석하여 주요 변화 추이 요약
+
+        Args:
+            company_data: 기업 데이터
+            grades: 등급 정보
+
+        Returns:
+            Dict: 시계열 분석 요약
+                - summary: 전체 추세 요약 문장
+                - key_changes: 주요 변화 리스트
+                - improving_categories: 개선 추세 카테고리
+                - declining_categories: 악화 추세 카테고리
+        """
+        trend = company_data.get('trend', {})
+
+        # 카테고리별 추세 분석
+        from .config import TARGET_METRICS
+
+        improving_categories = []
+        declining_categories = []
+        key_changes = []
+
+        for category, metrics in TARGET_METRICS.items():
+            improving_count = 0
+            declining_count = 0
+
+            for metric in metrics:
+                t = trend.get(metric, {})
+                yoy = t.get('yoy')
+                mom = t.get('mom')
+
+                if yoy is not None and mom is not None:
+                    # 방향성 고려
+                    from .config import METRIC_DIRECTION
+                    direction = METRIC_DIRECTION.get(metric, 'higher')
+
+                    if direction == 'higher':
+                        # 높을수록 좋은 지표
+                        is_improving = yoy > 0 and mom > 0
+                        is_declining = yoy < 0 and mom < 0
+                    else:
+                        # 낮을수록 좋은 지표
+                        is_improving = yoy < 0 and mom < 0
+                        is_declining = yoy > 0 and mom > 0
+
+                    if is_improving:
+                        improving_count += 1
+                    elif is_declining:
+                        declining_count += 1
+                        # 주요 악화 지표 기록
+                        if abs(yoy) > 5:  # 5% 이상 변화
+                            key_changes.append(f"{metric} 악화 (YoY {yoy:+.1f}%)")
+
+            # 카테고리 분류
+            if improving_count > declining_count:
+                improving_categories.append(category)
+            elif declining_count > improving_count:
+                declining_categories.append(category)
+
+        # 요약 문장 생성
+        if len(improving_categories) > len(declining_categories):
+            summary = f"전반적으로 개선 추세 ({', '.join(improving_categories[:2])} 등)"
+        elif len(declining_categories) > len(improving_categories):
+            summary = f"전반적으로 악화 추세 ({', '.join(declining_categories[:2])} 등 주의)"
+        else:
+            summary = "전반적으로 혼조세 (개선/악화 혼재)"
+
+        return {
+            'summary': summary,
+            'key_changes': key_changes[:3],  # 상위 3개만
+            'improving_categories': improving_categories,
+            'declining_categories': declining_categories,
+        }
 
     # =========================================================================
     # 부록: 재무제표 원본

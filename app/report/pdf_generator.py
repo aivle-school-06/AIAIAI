@@ -12,9 +12,14 @@ from typing import Dict, Optional, List, Tuple
 from fpdf import FPDF
 
 from .report_generator import generate_report
-from .llm_opinion import generate_opinion, generate_category_analysis, get_llm_generator, generate_timeseries_analysis, generate_industry_comparison_analysis, generate_category_industry_analysis
+from .llm_opinion import generate_opinion, generate_unified_opinion, generate_category_analysis, get_llm_generator, generate_timeseries_analysis, generate_industry_comparison_analysis, generate_category_industry_analysis
 from .data_loader import get_data_loader
 from .config import TARGET_METRICS, ALL_TARGETS, METRIC_DIRECTION, get_feature_description, METRIC_DESCRIPTION
+
+# 로고 이미지 경로 (ai-server/img/)
+LOGO_PATH = Path(__file__).parent.parent.parent / 'img'
+OWL_LOGO = LOGO_PATH / 'owllogo.png'
+LOGO_NO_BG = LOGO_PATH / 'logonobg.png'
 
 
 # 디자인 컬러 팔레트
@@ -115,10 +120,17 @@ class PDFReport(FPDF):
 
     def footer(self):
         self.set_y(-15)
+        # 로고 이미지 (좌측)
+        if LOGO_NO_BG.exists():
+            self.image(str(LOGO_NO_BG), x=10, y=self.get_y(), h=10)
+        else:
+            self.set_font('AppleSD', '', 8)
+            self.set_text_color(*Colors.MUTED)
+            self.cell(95, 10, 'BigBig', align='L')
+        # 페이지 번호 (우측)
         self.set_font('AppleSD', '', 8)
         self.set_text_color(*Colors.MUTED)
-        self.cell(95, 10, 'Powered by XGBoost + SHAP + GPT', align='L')
-        self.cell(95, 10, f'{self.page_no()}', align='R')
+        self.cell(0, 10, f'{self.page_no()}', align='R')
 
     # =========================================================================
     # 기본 컴포넌트
@@ -659,8 +671,8 @@ class PDFReportGenerator:
         opinion_data = report['opinion_data']
         opinion_data['shap_analysis'] = shap_data
 
-        # 4. LLM 의견 생성 (XAI 해석 포함)
-        opinion = generate_opinion(opinion_data)
+        # 4. LLM 통합 종합의견 생성 (내러티브 구조)
+        opinion = generate_unified_opinion(opinion_data)
 
         # 5. 카테고리별 XAI + LLM 분석 (13개 지표 전체)
         ai_pred = report['sections']['ai_prediction']
@@ -683,11 +695,15 @@ class PDFReportGenerator:
 
         # ===== 표지 =====
         pdf.add_page()
-        self._add_cover_page(pdf, meta, summary, ai_pred)
+        self._add_cover_page(pdf, meta, summary, ai_pred, financial)
+
+        # ===== 목차 =====
+        pdf.add_page()
+        self._add_table_of_contents(pdf)
 
         # ===== 1. Executive Summary =====
         pdf.add_page()
-        self._add_executive_summary(pdf, summary, ai_pred)
+        self._add_executive_summary(pdf, summary, ai_pred, financial, industry_comparison, trend_data)
 
         # ===== 2. 재무 상태 분석 (시계열 시각화 + 피쳐 엔지니어링 + LLM 분석) =====
         pdf.add_page()
@@ -707,6 +723,10 @@ class PDFReportGenerator:
         # ===== 6. 종합 의견 =====
         pdf.add_page()
         self._add_comprehensive_opinion(pdf, opinion)
+
+        # ===== 별첨: 분석 방법론 =====
+        pdf.add_page()
+        self._add_methodology_appendix(pdf)
 
         # PDF 저장
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -731,17 +751,12 @@ class PDFReportGenerator:
     # 표지
     # =========================================================================
 
-    def _add_cover_page(self, pdf: PDFReport, meta: Dict, summary: Dict, ai_pred: Dict):
-        pdf.ln(25)
-
-        # 타이틀
-        pdf.set_font('AppleSD', '', 11)
-        pdf.set_text_color(*Colors.PRIMARY)
-        pdf.cell(0, 6, 'AI-Powered Financial Analysis', align='C', ln=True)
+    def _add_cover_page(self, pdf: PDFReport, meta: Dict, summary: Dict, ai_pred: Dict,
+                        financial: Dict = None):
+        pdf.ln(15)
 
         pdf.set_font('AppleSD', '', 28)
         pdf.set_text_color(*Colors.DARK)
-        pdf.ln(5)
         pdf.cell(0, 15, meta['기업명'], align='C', ln=True)
 
         pdf.set_font('AppleSD', '', 11)
@@ -754,9 +769,11 @@ class PDFReportGenerator:
         pdf.set_line_width(0.8)
         pdf.line(60, pdf.get_y(), 150, pdf.get_y())
         pdf.set_line_width(0.2)
-        pdf.ln(15)
+        pdf.ln(10)
 
-        # 등급 표시 - 박스 형태로 중앙에
+        financial = financial or {}
+
+        # 레이더 차트 + 종합 등급
         grade = summary['overall_grade']
         score = summary['overall_score']
 
@@ -767,145 +784,472 @@ class PDFReportGenerator:
         }
         g_color = grade_colors.get(grade, Colors.MUTED)
 
-        # 등급 박스 (중앙 정렬)
+        # 레이더 차트 그리기
+        categories = ['수익성', '안정성', '차입금', '유동성', '현금흐름']
+        cat_scores = []
+        for cat in categories:
+            cat_data = financial.get(cat, {})
+            cat_scores.append(cat_data.get('score', 3))  # 기본값 3
+
+        # 차트 중심 및 크기
+        center_x = 105  # A4 중앙
+        center_y = pdf.get_y() + 55
+        max_radius = 45
+
+        # 결측 여부 확인 (점수가 None이거나 0이면 결측)
+        is_missing = []
+        for cat in categories:
+            cat_data = financial.get(cat, {})
+            cat_score = cat_data.get('score')  # 카테고리별 점수 (overall score와 구분)
+            # 점수가 None이거나, metrics가 비어있으면 결측
+            metrics_data = cat_data.get('metrics', {})
+            has_data = any(
+                not m.get('is_missing', True)
+                for m in metrics_data.values()
+            ) if metrics_data else False
+            is_missing.append(not has_data and cat_score is None)
+
+        # 5각형 배경 그리드 (6단계)
+        for level in range(1, 7):
+            radius = max_radius * (level / 6)
+            points = []
+            for i in range(5):
+                angle = math.radians(-90 + i * 72)  # -90도에서 시작 (위쪽)
+                x = center_x + radius * math.cos(angle)
+                y = center_y + radius * math.sin(angle)
+                points.append((x, y))
+
+            # 그리드 선
+            pdf.set_draw_color(220, 220, 220)
+            pdf.set_line_width(0.3)
+            for i in range(5):
+                next_i = (i + 1) % 5
+                pdf.line(points[i][0], points[i][1], points[next_i][0], points[next_i][1])
+
+        # 축 선 (중심에서 각 꼭지점으로)
+        pdf.set_draw_color(200, 200, 200)
+        for i in range(5):
+            angle = math.radians(-90 + i * 72)
+            x = center_x + max_radius * math.cos(angle)
+            y = center_y + max_radius * math.sin(angle)
+            pdf.line(center_x, center_y, x, y)
+
+        # 카테고리 라벨 (그래프에 가깝게, 결측이면 회색)
+        label_radius = max_radius + 6
+        for i, cat in enumerate(categories):
+            angle = math.radians(-90 + i * 72)
+            x = center_x + label_radius * math.cos(angle)
+            y = center_y + label_radius * math.sin(angle)
+
+            # 결측이면 회색, 아니면 카테고리 색상
+            if is_missing[i]:
+                label_color = Colors.MUTED
+            else:
+                label_color, _ = CATEGORY_COLORS.get(cat, (Colors.DARK, Colors.LIGHT))
+
+            pdf.set_font('AppleSD', '', 11)
+            pdf.set_text_color(*label_color)
+
+            # 위치 조정
+            if i == 0:  # 위
+                pdf.set_xy(x - 15, y - 10)
+                pdf.cell(30, 6, cat, align='C')
+            elif i == 1:  # 오른쪽 위
+                pdf.set_xy(x + 2, y - 3)
+                pdf.cell(25, 6, cat, align='L')
+            elif i == 2:  # 오른쪽 아래
+                pdf.set_xy(x + 2, y - 3)
+                pdf.cell(25, 6, cat, align='L')
+            elif i == 3:  # 왼쪽 아래
+                pdf.set_xy(x - 27, y - 3)
+                pdf.cell(25, 6, cat, align='R')
+            elif i == 4:  # 왼쪽 위
+                pdf.set_xy(x - 27, y - 3)
+                pdf.cell(25, 6, cat, align='R')
+
+        # 데이터 다각형 좌표 계산
+        data_points = []
+        for i, s in enumerate(cat_scores):
+            radius = max_radius * (s / 6)  # 6점 만점 기준
+            angle = math.radians(-90 + i * 72)
+            x = center_x + radius * math.cos(angle)
+            y = center_y + radius * math.sin(angle)
+            data_points.append((x, y))
+
+        # 다각형 채우기 (반투명)
+        pdf.set_fill_color(41, 128, 185)   # PRIMARY 색상
+        pdf.set_line_width(0.5)
+
+        with pdf.local_context(fill_opacity=0.25):
+            pdf.set_fill_color(41, 128, 185)
+            pdf.polygon(data_points, style='F')  # 채우기만
+
+        # 각 변을 개별적으로 그리기 (결측이면 회색)
+        for i in range(5):
+            next_i = (i + 1) % 5
+            # 현재 또는 다음 꼭지점이 결측이면 회색 선
+            if is_missing[i] or is_missing[next_i]:
+                pdf.set_draw_color(*Colors.MUTED)
+            else:
+                pdf.set_draw_color(41, 128, 185)
+            pdf.set_line_width(0.5)
+            pdf.line(data_points[i][0], data_points[i][1],
+                    data_points[next_i][0], data_points[next_i][1])
+
+        # 각 꼭지점에 작은 점 (결측이면 회색)
+        with pdf.local_context(fill_opacity=0.5):
+            for i, (x, y) in enumerate(data_points):
+                if is_missing[i]:
+                    pdf.set_fill_color(*Colors.MUTED)
+                else:
+                    pdf.set_fill_color(41, 128, 185)
+                pdf.ellipse(x - 0.8, y - 0.8, 1.6, 1.6, 'F')
+
+        # 종합 등급 박스 (차트 아래)
+        pdf.set_y(center_y + max_radius + 25)
+
         box_x = 75
         box_y = pdf.get_y()
         pdf.set_fill_color(*g_color)
-        pdf.rect(box_x, box_y, 60, 40, 'F')
+        pdf.rect(box_x, box_y, 60, 35, 'F')
 
         # 등급 텍스트
-        pdf.set_xy(box_x, box_y + 8)
-        pdf.set_font('AppleSD', '', 28)
+        pdf.set_xy(box_x, box_y + 5)
+        pdf.set_font('AppleSD', '', 24)
         pdf.set_text_color(*Colors.WHITE)
         pdf.cell(60, 12, grade, align='C')
 
         # 점수 텍스트
-        pdf.set_xy(box_x, box_y + 22)
-        pdf.set_font('AppleSD', '', 12)
+        pdf.set_xy(box_x, box_y + 20)
+        pdf.set_font('AppleSD', '', 11)
         pdf.set_text_color(*Colors.WHITE)
-        pdf.cell(60, 10, f'{score:.2f} / 5.00', align='C')
-
-        # 다음 섹션으로 이동
-        pdf.set_y(box_y + 50)
-
-        pdf.set_font('AppleSD', '', 10)
-        pdf.set_text_color(*Colors.DARK)
-        pdf.cell(0, 6, '핵심 지표', align='C', ln=True)
-
-        # 6개 지표 카드
-        pdf.ln(5)
-        snapshot = summary['snapshot']
-        metrics = list(snapshot.items())[:6]
-
-        start_x = 15
-        card_width = 58
-        card_height = 38
-        row_y = pdf.get_y()
-
-        # 첫 번째 행 (3개 카드)
-        for i, (metric, info) in enumerate(metrics[:3]):
-            pdf.set_xy(start_x + i * (card_width + 5), row_y)
-            pdf.metric_card(metric, info['formatted'], info['grade'],
-                           info.get('percentile'), width=card_width)
-
-        # 두 번째 행으로 이동
-        row_y = row_y + card_height + 5
-
-        # 두 번째 행 (3개 카드)
-        for i, (metric, info) in enumerate(metrics[3:6]):
-            pdf.set_xy(start_x + i * (card_width + 5), row_y)
-            pdf.metric_card(metric, info['formatted'], info['grade'],
-                           info.get('percentile'), width=card_width)
-
-        # AI 전망 위치로 이동
-        pdf.set_y(row_y + card_height + 10)
-
-        # AI 전망
-        outlook = ai_pred.get('summary', {}).get('overall_outlook', 'neutral')
-        outlook_info = {
-            'positive': ('AI 전망: 긍정적', Colors.SUCCESS),
-            'negative': ('AI 전망: 주의 필요', Colors.DANGER),
-            'neutral': ('AI 전망: 중립', Colors.MUTED)
-        }
-        text, color = outlook_info.get(outlook, ('AI 전망: 중립', Colors.MUTED))
-
-        pdf.set_font('AppleSD', '', 12)
-        pdf.set_text_color(*color)
-        pdf.cell(0, 8, text, align='C', ln=True)
+        pdf.cell(60, 8, f'{score:.2f} / 6.00', align='C')
 
         # 기준일
-        pdf.ln(5)
+        pdf.set_y(box_y + 45)
         pdf.set_font('AppleSD', '', 9)
         pdf.set_text_color(*Colors.MUTED)
         pdf.cell(0, 5, f"분석 기준: {meta['기준일']}", align='C', ln=True)
 
     # =========================================================================
+    # 목차
+    # =========================================================================
+
+    def _add_table_of_contents(self, pdf: PDFReport):
+        """목차 페이지"""
+        pdf.ln(5)
+
+        # 목차 제목 (검정 박스 없이)
+        pdf.set_font('AppleSD', '', 16)
+        pdf.set_text_color(*Colors.DARK)
+        pdf.cell(0, 10, '목차', ln=True)
+
+        pdf.set_draw_color(*Colors.DARK)
+        pdf.set_line_width(0.5)
+        pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
+        pdf.set_line_width(0.2)
+        pdf.ln(10)
+
+        toc_items = [
+            ('1', 'Executive Summary', '카테고리별 업종상대, 시계열 추세, AI 예측 요약'),
+            ('2', '재무 상태 분석', '13개 지표 시계열 차트 및 피쳐 분석'),
+            ('3', '업종 비교', '동일 업종 내 상대적 위치 분석'),
+            ('4', 'AI 예측 요약', 'XGBoost 기반 다음 분기 예측'),
+            ('5', '카테고리별 XAI 분석', 'SHAP 기반 예측 요인 분석'),
+            ('6', '종합 의견', '통합 내러티브 종합 분석'),
+            ('별첨', '분석 방법론', '등급 산정 기준 및 AI 모델 성능'),
+        ]
+
+        for num, title, desc in toc_items:
+            row_y = pdf.get_y()
+
+            # 번호 박스 (검정/회색)
+            pdf.set_fill_color(*Colors.DARK)
+            pdf.rect(15, row_y, 12, 12, 'F')
+            pdf.set_xy(15, row_y + 2)
+            pdf.set_font('AppleSD', '', 10)
+            pdf.set_text_color(*Colors.WHITE)
+            pdf.cell(12, 8, num, align='C')
+
+            # 제목
+            pdf.set_xy(32, row_y + 2)
+            pdf.set_font('AppleSD', '', 12)
+            pdf.set_text_color(*Colors.DARK)
+            pdf.cell(60, 8, title)
+
+            # 설명
+            pdf.set_xy(95, row_y + 2)
+            pdf.set_font('AppleSD', '', 9)
+            pdf.set_text_color(*Colors.MUTED)
+            pdf.cell(100, 8, desc)
+
+            pdf.ln(18)
+
+    # =========================================================================
     # Executive Summary
     # =========================================================================
 
-    def _add_executive_summary(self, pdf: PDFReport, summary: Dict, ai_pred: Dict):
+    def _add_executive_summary(self, pdf: PDFReport, summary: Dict, ai_pred: Dict,
+                                financial: Dict = None, industry_comparison: Dict = None,
+                                trend_data: Dict = None):
+        """Executive Summary - 앞으로 나올 내용의 미리보기"""
         pdf.section_header('1', 'Executive Summary')
 
-        # 등급 - 간단한 뱃지 + 점수
-        grade = summary['overall_grade']
-        score = summary['overall_score']
+        financial = financial or {}
+        industry_comparison = industry_comparison or {}
+        trend_data = trend_data or {}
 
         grade_colors = {
             'A+': Colors.GRADE_A_PLUS, 'A': Colors.GRADE_A,
             'B+': Colors.GRADE_B_PLUS, 'B': Colors.GRADE_B,
             'C': Colors.GRADE_C, 'F': Colors.GRADE_F
         }
+
+        categories = ['수익성', '안정성', '차입금', '유동성', '현금흐름']
+
+        # 카테고리별 지표 매핑
+        cat_metrics = {
+            '수익성': ['ROA', 'ROE', '매출액영업이익률'],
+            '안정성': ['부채비율', '자기자본비율', '자본잠식률'],
+            '차입금': ['단기차입금비율'],
+            '유동성': ['유동비율', '당좌비율', '유동부채비율'],
+            '현금흐름': ['CFO_자산비율', 'CFO_매출액비율', 'CFO증감률'],
+        }
+
+        # 지표별 방향 (up: 높을수록 좋음)
+        metric_direction = {
+            'ROA': 'up', 'ROE': 'up', '매출액영업이익률': 'up',
+            '부채비율': 'down', '자기자본비율': 'up', '자본잠식률': 'down',
+            '단기차입금비율': 'down',
+            '유동비율': 'up', '당좌비율': 'up', '유동부채비율': 'down',
+            'CFO_자산비율': 'up', 'CFO_매출액비율': 'up', 'CFO증감률': 'up',
+        }
+
+        section_y = pdf.get_y() + 3
+
+        # =========================================================
+        # 테이블 헤더
+        # =========================================================
+        header_y = section_y
+        col_widths = [40, 50, 50, 50]  # 카테고리, 업종상대, 시계열추세, 예측
+        col_x = [10, 50, 100, 150]
+
+        # 헤더 배경
+        pdf.set_fill_color(*Colors.DARK)
+        pdf.rect(10, header_y, 190, 10, 'F')
+
+        # 헤더 텍스트
+        pdf.set_font('AppleSD', '', 9)
+        pdf.set_text_color(*Colors.WHITE)
+
+        headers = ['카테고리', '업종상대 위치', '시계열 추세', 'AI 예측']
+        for i, header in enumerate(headers):
+            pdf.set_xy(col_x[i], header_y + 2)
+            pdf.cell(col_widths[i], 6, header, align='C')
+
+        # =========================================================
+        # 5개 카테고리 행
+        # =========================================================
+        row_h = 28
+        all_predictions = ai_pred.get('all_predictions', {})
+
+        for cat_idx, cat in enumerate(categories):
+            row_y = header_y + 12 + cat_idx * row_h
+            cat_data = financial.get(cat, {})
+            cat_grade = cat_data.get('grade', 'N/A')
+            cat_color, cat_light = CATEGORY_COLORS.get(cat, (Colors.PRIMARY, Colors.PRIMARY_LIGHT))
+            g_color = grade_colors.get(cat_grade, Colors.MUTED)
+
+            # 행 배경 (줄무늬)
+            if cat_idx % 2 == 0:
+                pdf.set_fill_color(248, 249, 250)
+            else:
+                pdf.set_fill_color(255, 255, 255)
+            pdf.rect(10, row_y, 190, row_h, 'F')
+
+            # ----- 1열: 카테고리명 + 등급 -----
+            pdf.set_xy(col_x[0] + 2, row_y + 3)
+            pdf.set_font('AppleSD', '', 10)
+            pdf.set_text_color(*cat_color)
+            pdf.cell(col_widths[0] - 4, 6, cat)
+
+            # 등급 뱃지
+            pdf.set_fill_color(*g_color)
+            badge_x = col_x[0] + 2
+            pdf.rect(badge_x, row_y + 12, 22, 12, 'F')
+            pdf.set_xy(badge_x, row_y + 14)
+            pdf.set_font('AppleSD', '', 10)
+            pdf.set_text_color(*Colors.WHITE)
+            pdf.cell(22, 8, cat_grade, align='C')
+
+            # ----- 2열: 업종상대 위치 -----
+            metrics_in_cat = cat_metrics.get(cat, [])
+            cat_percentiles = []
+            for m in metrics_in_cat:
+                m_data = cat_data.get('metrics', {}).get(m, {})
+                pct = m_data.get('percentile')
+                if pct is not None:
+                    cat_percentiles.append(pct)
+
+            avg_percentile = sum(cat_percentiles) / len(cat_percentiles) if cat_percentiles else 50
+
+            # 위치 바 (오른쪽이 좋음)
+            bar_x = col_x[1] + 5
+            bar_w = col_widths[1] - 10
+            bar_y = row_y + 8
+
+            pdf.set_fill_color(220, 220, 220)
+            pdf.rect(bar_x, bar_y, bar_w, 6, 'F')
+
+            # 위치 마커 (상위 10% → 오른쪽, 상위 90% → 왼쪽)
+            pos_x = bar_x + ((100 - avg_percentile) / 100) * bar_w
+            if avg_percentile <= 30:
+                marker_color = Colors.SUCCESS
+            elif avg_percentile <= 70:
+                marker_color = Colors.WARNING
+            else:
+                marker_color = Colors.DANGER
+
+            pdf.set_fill_color(*marker_color)
+            pdf.rect(pos_x - 3, bar_y - 2, 6, 10, 'F')
+
+            # 위치 텍스트
+            pdf.set_xy(col_x[1], row_y + 16)
+            pdf.set_font('AppleSD', '', 8)
+            pdf.set_text_color(*Colors.MUTED)
+            position_text = f'상위 {avg_percentile:.0f}%'
+            pdf.cell(col_widths[1], 5, position_text, align='C')
+
+            # ----- 3열: 시계열 추세 -----
+            # 카테고리 내 지표들의 이동평균 기반 추세 계산
+            improving_count = 0
+            declining_count = 0
+
+            for m in metrics_in_cat:
+                m_trend = trend_data.get(m, {})
+                mom = m_trend.get('mom')  # 전분기 대비
+
+                if mom is not None:
+                    m_dir = metric_direction.get(m, 'up')
+                    # 방향에 따라 좋은/나쁜 판단
+                    if m_dir == 'up':
+                        if mom > 0:
+                            improving_count += 1
+                        elif mom < 0:
+                            declining_count += 1
+                    else:  # down (낮을수록 좋음)
+                        if mom < 0:
+                            improving_count += 1
+                        elif mom > 0:
+                            declining_count += 1
+
+            # 추세 표시
+            pdf.set_xy(col_x[2], row_y + 5)
+            pdf.set_font('AppleSD', '', 9)
+
+            if improving_count > declining_count:
+                pdf.set_text_color(*Colors.SUCCESS)
+                pdf.cell(col_widths[2], 6, '▲ 개선 중', align='C')
+            elif declining_count > improving_count:
+                pdf.set_text_color(*Colors.DANGER)
+                pdf.cell(col_widths[2], 6, '▼ 악화 중', align='C')
+            else:
+                pdf.set_text_color(*Colors.MUTED)
+                pdf.cell(col_widths[2], 6, '― 유지', align='C')
+
+            pdf.set_xy(col_x[2], row_y + 14)
+            pdf.set_font('AppleSD', '', 8)
+            pdf.set_text_color(*Colors.TEXT)
+            pdf.cell(col_widths[2], 5, f'(↑{improving_count} ↓{declining_count})', align='C')
+
+            # ----- 4열: AI 예측 요약 -----
+            # direction 값은 이미 좋음/나쁨을 반영함 (improving=개선, declining=악화)
+            pred_improving = 0
+            pred_declining = 0
+
+            for m in metrics_in_cat:
+                pred = all_predictions.get(m, {})
+                pred_dir = pred.get('direction', '')
+                if pred_dir == 'improving':
+                    pred_improving += 1
+                elif pred_dir == 'declining':
+                    pred_declining += 1
+                # 'stable', 'unknown'은 무시
+
+            pred_x = col_x[3]
+            pdf.set_xy(pred_x, row_y + 5)
+            pdf.set_font('AppleSD', '', 9)
+
+            if pred_improving > pred_declining:
+                pdf.set_text_color(*Colors.SUCCESS)
+                pdf.cell(col_widths[3], 6, '▲ 개선 예상', align='C')
+            elif pred_declining > pred_improving:
+                pdf.set_text_color(*Colors.DANGER)
+                pdf.cell(col_widths[3], 6, '▼ 악화 예상', align='C')
+            else:
+                pdf.set_text_color(*Colors.MUTED)
+                pdf.cell(col_widths[3], 6, '― 유지 예상', align='C')
+
+            pdf.set_xy(pred_x, row_y + 14)
+            pdf.set_font('AppleSD', '', 8)
+            pdf.set_text_color(*Colors.TEXT)
+            pdf.cell(col_widths[3], 5, f'(↑{pred_improving} ↓{pred_declining})', align='C')
+
+        # =========================================================
+        # 하단 요약
+        # =========================================================
+        bottom_y = header_y + 12 + 5 * row_h + 5
+        pdf.set_y(bottom_y)
+
+        # 전체 요약 박스
+        pdf.set_fill_color(*Colors.LIGHT)
+        pdf.rect(10, bottom_y, 190, 25, 'F')
+
+        # 종합 등급
+        grade = summary['overall_grade']
+        score = summary['overall_score']
         g_color = grade_colors.get(grade, Colors.MUTED)
 
-        # 중앙 정렬된 등급 뱃지
-        pdf.set_x(75)
         pdf.set_fill_color(*g_color)
+        pdf.rect(15, bottom_y + 4, 30, 17, 'F')
+        pdf.set_xy(15, bottom_y + 6)
+        pdf.set_font('AppleSD', '', 14)
         pdf.set_text_color(*Colors.WHITE)
-        pdf.set_font('AppleSD', '', 16)
-        pdf.cell(40, 20, grade, fill=True, align='C')
+        pdf.cell(30, 10, grade, align='C')
 
+        # 종합 점수
+        pdf.set_xy(50, bottom_y + 8)
         pdf.set_font('AppleSD', '', 11)
         pdf.set_text_color(*Colors.DARK)
-        pdf.cell(40, 20, f'{score:.2f} / 5.00')
-        pdf.ln(28)
+        pdf.cell(30, 8, f'{score:.2f} / 6.00')
 
-        # 현재 vs 예측 비교
-        pdf.subsection_title('현재 vs AI 예측')
+        # AI 전망
+        pred_summary = ai_pred.get('summary', {})
+        outlook = pred_summary.get('overall_outlook', 'neutral')
+        outlook_info = {
+            'positive': ('AI 전망: 긍정적', Colors.SUCCESS),
+            'negative': ('AI 전망: 주의 필요', Colors.DANGER),
+            'neutral': ('AI 전망: 중립', Colors.MUTED)
+        }
+        outlook_text, outlook_color = outlook_info.get(outlook, ('AI 전망: 중립', Colors.MUTED))
 
-        metrics_to_show = ['ROA', 'ROE', '부채비율', '유동비율']
-        for metric in metrics_to_show:
-            info = summary['snapshot'].get(metric, {})
-            pred_info = ai_pred.get('all_predictions', {}).get(metric, {})
-            current = info.get('value', 0)
-            predicted = pred_info.get('predicted', current)
+        pdf.set_xy(100, bottom_y + 8)
+        pdf.set_font('AppleSD', '', 11)
+        pdf.set_text_color(*outlook_color)
+        pdf.cell(50, 8, outlook_text)
 
-            if current is not None and predicted is not None:
-                pdf.comparison_row(metric, current, predicted)
-
-        pdf.ln(8)
-
-        # 강점/약점 2열
-        pdf.subsection_title('강점 / 약점')
-
+        # 강점/약점 개수
         strengths = summary.get('strengths', [])
         weaknesses = summary.get('weaknesses', [])
 
-        pdf.set_font('AppleSD', '', 10)
-        pdf.set_text_color(*Colors.SUCCESS)
-        pdf.cell(95, 8, 'Strengths')
-        pdf.set_text_color(*Colors.DANGER)
-        pdf.cell(95, 8, 'Weaknesses', ln=True)
-
+        pdf.set_xy(155, bottom_y + 6)
         pdf.set_font('AppleSD', '', 9)
-        max_items = max(len(strengths), len(weaknesses))
-        for i in range(min(max_items, 3)):
-            s = strengths[i]['metric'] if i < len(strengths) else ''
-            w = weaknesses[i]['metric'] if i < len(weaknesses) else ''
+        pdf.set_text_color(*Colors.SUCCESS)
+        pdf.cell(20, 6, f'강점 {len(strengths)}개')
 
-            pdf.set_text_color(*Colors.SUCCESS)
-            pdf.cell(95, 7, f'  + {s}' if s else '')
-            pdf.set_text_color(*Colors.DANGER)
-            pdf.cell(95, 7, f'  - {w}' if w else '', ln=True)
+        pdf.set_xy(155, bottom_y + 13)
+        pdf.set_text_color(*Colors.DANGER)
+        pdf.cell(20, 6, f'약점 {len(weaknesses)}개')
 
     # =========================================================================
     # 시각적 재무 분석 + 시계열 추세
@@ -2246,36 +2590,295 @@ class PDFReportGenerator:
     # =========================================================================
 
     def _add_comprehensive_opinion(self, pdf: PDFReport, opinion: Dict):
+        """
+        통합 종합의견 섹션 (내러티브 구조)
+
+        한줄요약 → 현황분석 → 추세분석 → AI전망 → 주시포인트 → 결론
+        """
         pdf.section_header('6', '종합 의견')
 
-        # 전문가용
-        pdf.subsection_title('전문가용 분석')
-        expert = opinion.get('expert', '')
-        pdf.body_text(expert)
+        # 1. 한줄 요약 (강조 박스)
+        headline = opinion.get('headline', '')
+        if headline:
+            # 배경 박스
+            box_y = pdf.get_y()
+            pdf.set_fill_color(*Colors.PRIMARY_LIGHT)
+            pdf.rect(10, box_y, 190, 14, 'F')
+
+            # 텍스트
+            pdf.set_xy(15, box_y + 3)
+            pdf.set_font('AppleSD', '', 11)
+            pdf.set_text_color(*Colors.PRIMARY_DARK)
+            pdf.multi_cell(180, 6, headline)
+            pdf.set_y(box_y + 16)
+
         pdf.ln(3)
 
-        # 비전문가용
-        pdf.subsection_title('쉬운 설명')
-        simple = opinion.get('simple', '')
-        pdf.body_text(simple)
+        # 2. 현황 분석
+        analysis = opinion.get('analysis', '')
+        if analysis:
+            pdf.subsection_title('현황 분석')
+            pdf.body_text(analysis)
+            pdf.ln(2)
+
+        # 3. 추세 분석
+        trend_text = opinion.get('trend', '')
+        if trend_text:
+            pdf.subsection_title('추세 분석')
+            pdf.body_text(trend_text)
+            pdf.ln(2)
+
+        # 4. AI 전망
+        forecast = opinion.get('forecast', '')
+        if forecast:
+            pdf.subsection_title('AI 전망')
+            pdf.body_text(forecast)
+            pdf.ln(2)
+
+        # 5. 주시 포인트
+        watch_points = opinion.get('watch_points', [])
+        if watch_points:
+            pdf.subsection_title('주시 포인트')
+            for i, point in enumerate(watch_points[:3], 1):
+                pdf.set_font('AppleSD', '', 9)
+                # 아이콘 색상 (1: 주의, 2: 기회, 3: 확인)
+                if i == 1:
+                    icon_color = Colors.WARNING
+                elif i == 2:
+                    icon_color = Colors.SUCCESS
+                else:
+                    icon_color = Colors.PRIMARY
+
+                pdf.set_text_color(*icon_color)
+                pdf.cell(5, 5, '▶')
+                pdf.set_text_color(*Colors.TEXT)
+                pdf.cell(0, 5, f' {point}', ln=True)
+            pdf.ln(2)
+
+        # 6. 결론 (강조 박스)
+        conclusion = opinion.get('conclusion', '')
+        if conclusion:
+            # 배경 박스
+            box_y = pdf.get_y()
+            pdf.set_fill_color(*Colors.LIGHT)
+            pdf.set_draw_color(*Colors.PRIMARY)
+            pdf.set_line_width(0.5)
+            pdf.rect(10, box_y, 190, 18, 'FD')
+            pdf.set_line_width(0.2)
+
+            # 레이블
+            pdf.set_xy(15, box_y + 2)
+            pdf.set_font('AppleSD', '', 8)
+            pdf.set_text_color(*Colors.PRIMARY)
+            pdf.cell(0, 4, '결론', ln=True)
+
+            # 본문
+            pdf.set_x(15)
+            pdf.set_font('AppleSD', '', 10)
+            pdf.set_text_color(*Colors.DARK)
+            pdf.multi_cell(180, 5, conclusion[:200])
+
+            pdf.set_y(box_y + 22)
+
+    # =========================================================================
+    # 별첨: 분석 방법론
+    # =========================================================================
+
+    def _add_methodology_appendix(self, pdf: PDFReport):
+        """
+        별첨: 분석 방법론
+
+        등급 산정 기준, AI 모델 성능, 지표 설명 등
+        보고서에서 사용된 방법론을 설명합니다.
+        """
+        from .config import (
+            GRADE_THRESHOLDS, GRADE_SCORES, MODEL_R2, MODEL_CONFIDENCE,
+            TARGET_METRICS, METRIC_DIRECTION, METRIC_DESCRIPTION
+        )
+
+        pdf.section_header('별첨', '분석 방법론')
+
+        # ---------------------------------------------------------------------
+        # 1. 등급 산정 기준
+        # ---------------------------------------------------------------------
+        pdf.subsection_title('1. 등급 산정 기준')
+
+        pdf.set_font('AppleSD', '', 9)
+        pdf.set_text_color(*Colors.TEXT)
+        pdf.multi_cell(0, 5, (
+            "본 보고서의 등급은 동일 업종 내 상대적 위치(백분위)를 기준으로 산정됩니다. "
+            "각 지표별로 업종 내 순위를 계산한 후, 아래 기준에 따라 등급을 부여합니다."
+        ))
         pdf.ln(3)
 
-        # 핵심 포인트
-        pdf.subsection_title('핵심 포인트')
-        for point in opinion.get('key_points', [])[:4]:
+        # 등급 테이블
+        table_data = [
+            ('등급', '백분위 기준', '점수', '해석'),
+            ('A+', '상위 10% 이내', '6점', '매우 우수'),
+            ('A', '상위 25% 이내', '5점', '우수'),
+            ('B+', '상위 40% 이내', '4점', '양호'),
+            ('B', '상위 60% 이내', '3점', '보통'),
+            ('C', '상위 80% 이내', '2점', '주의'),
+            ('F', '하위 20%', '1점', '위험'),
+        ]
+
+        col_widths = [20, 50, 25, 40]
+        row_height = 7
+
+        for i, row in enumerate(table_data):
+            if i == 0:
+                # 헤더
+                pdf.set_fill_color(*Colors.DARK)
+                pdf.set_text_color(*Colors.WHITE)
+                pdf.set_font('AppleSD', '', 9)
+            else:
+                pdf.set_fill_color(*Colors.LIGHT if i % 2 == 0 else Colors.WHITE)
+                pdf.set_text_color(*Colors.TEXT)
+                pdf.set_font('AppleSD', '', 9)
+
+            x_start = 25
+            for j, (cell, width) in enumerate(zip(row, col_widths)):
+                pdf.set_xy(x_start, pdf.get_y())
+                pdf.cell(width, row_height, cell, border=0, fill=True, align='C')
+                x_start += width
+            pdf.ln(row_height)
+
+        pdf.ln(3)
+        pdf.set_font('AppleSD', '', 8)
+        pdf.set_text_color(*Colors.MUTED)
+        pdf.multi_cell(0, 4, (
+            "* 종합 등급은 13개 지표 점수의 평균으로 산출됩니다. "
+            "결측 지표는 계산에서 제외됩니다."
+        ))
+        pdf.ln(5)
+
+        # ---------------------------------------------------------------------
+        # 2. AI 모델 성능
+        # ---------------------------------------------------------------------
+        pdf.subsection_title('2. AI 예측 모델 성능')
+
+        pdf.set_font('AppleSD', '', 9)
+        pdf.set_text_color(*Colors.TEXT)
+        pdf.multi_cell(0, 5, (
+            "본 보고서의 AI 예측은 XGBoost 앙상블 모델을 사용합니다. "
+            "각 지표별로 개별 모델을 학습하였으며, R² (결정계수)를 기준으로 예측 신뢰도를 평가합니다."
+        ))
+        pdf.ln(3)
+
+        # 신뢰도 기준 설명
+        pdf.set_font('AppleSD', '', 8)
+        pdf.set_text_color(*Colors.MUTED)
+        pdf.multi_cell(0, 4, (
+            f"신뢰도 기준: 높음 (R² ≥ {MODEL_CONFIDENCE['high']}), "
+            f"중간 ({MODEL_CONFIDENCE['medium']} ≤ R² < {MODEL_CONFIDENCE['high']}), "
+            f"낮음 (R² < {MODEL_CONFIDENCE['medium']})"
+        ))
+        pdf.ln(3)
+
+        # 모델 성능 테이블
+        # 카테고리별로 그룹화
+        pdf.set_font('AppleSD', '', 9)
+        pdf.set_text_color(*Colors.TEXT)
+
+        for category, metrics in TARGET_METRICS.items():
+            # 카테고리 헤더
             pdf.set_font('AppleSD', '', 9)
             pdf.set_text_color(*Colors.PRIMARY)
-            pdf.cell(5, 5, '●')
-            pdf.set_text_color(*Colors.TEXT)
-            pdf.cell(0, 5, f' {point}', ln=True)
+            pdf.cell(0, 6, f"■ {category}", ln=True)
+
+            # 지표별 R² 표시
+            for metric in metrics:
+                r2 = MODEL_R2.get(metric, 0)
+                direction = METRIC_DIRECTION.get(metric, 'higher')
+                dir_text = '↑' if direction == 'higher' else '↓'
+
+                # 신뢰도 레벨
+                if r2 >= MODEL_CONFIDENCE['high']:
+                    confidence = '높음'
+                    conf_color = Colors.SUCCESS
+                elif r2 >= MODEL_CONFIDENCE['medium']:
+                    confidence = '중간'
+                    conf_color = Colors.WARNING
+                else:
+                    confidence = '낮음'
+                    conf_color = Colors.DANGER
+
+                pdf.set_x(20)
+                pdf.set_font('AppleSD', '', 8)
+                pdf.set_text_color(*Colors.TEXT)
+                pdf.cell(55, 5, f"{metric} {dir_text}")
+
+                pdf.set_text_color(*Colors.MUTED)
+                pdf.cell(25, 5, f"R² = {r2:.4f}")
+
+                pdf.set_text_color(*conf_color)
+                pdf.cell(20, 5, f"({confidence})", ln=True)
+
+            pdf.ln(1)
 
         pdf.ln(3)
 
-        # 주의 사항
-        risk = opinion.get('risk_summary', '')
-        if risk and '없음' not in risk:
-            pdf.subsection_title('주의 사항')
-            pdf.insight_box('Risk', risk[:200], 'warning')
+        # ---------------------------------------------------------------------
+        # 3. 분석 지표 설명
+        # ---------------------------------------------------------------------
+        # 페이지 여백 확인
+        if pdf.get_y() > 200:
+            pdf.add_page()
+
+        pdf.subsection_title('3. 분석 지표 설명')
+
+        pdf.set_font('AppleSD', '', 9)
+        pdf.set_text_color(*Colors.TEXT)
+        pdf.multi_cell(0, 5, (
+            "본 보고서에서 분석하는 13개 재무지표의 정의와 해석 방법입니다."
+        ))
+        pdf.ln(3)
+
+        for category, metrics in TARGET_METRICS.items():
+            # 카테고리 헤더
+            pdf.set_font('AppleSD', '', 9)
+            pdf.set_text_color(*Colors.PRIMARY)
+            pdf.cell(0, 6, f"■ {category}", ln=True)
+
+            for metric in metrics:
+                description = METRIC_DESCRIPTION.get(metric, '')
+                direction = METRIC_DIRECTION.get(metric, 'higher')
+                dir_text = '(높을수록 좋음)' if direction == 'higher' else '(낮을수록 좋음)'
+
+                pdf.set_x(20)
+                pdf.set_font('AppleSD', '', 8)
+                pdf.set_text_color(*Colors.DARK)
+                pdf.cell(50, 5, f"• {metric}")
+
+                pdf.set_text_color(*Colors.MUTED)
+                pdf.cell(25, 5, dir_text, ln=True)
+
+                if description:
+                    pdf.set_x(25)
+                    pdf.set_font('AppleSD', '', 7)
+                    pdf.set_text_color(*Colors.TEXT)
+                    # 설명이 너무 길면 잘라서 표시
+                    desc_short = description[:80] + ('...' if len(description) > 80 else '')
+                    pdf.cell(0, 4, desc_short, ln=True)
+
+            pdf.ln(2)
+
+        # ---------------------------------------------------------------------
+        # 4. 면책 조항
+        # ---------------------------------------------------------------------
+        pdf.ln(5)
+        pdf.set_draw_color(*Colors.MUTED)
+        pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+        pdf.ln(3)
+
+        pdf.set_font('AppleSD', '', 7)
+        pdf.set_text_color(*Colors.MUTED)
+        pdf.multi_cell(0, 4, (
+            "본 보고서는 공시된 재무정보를 기반으로 AI 모델이 자동 생성한 참고 자료입니다. "
+            "투자 권유나 재무 자문을 목적으로 하지 않으며, 투자 결정에 대한 책임은 투자자 본인에게 있습니다. "
+            "AI 예측은 과거 데이터를 기반으로 하며, 실제 미래 성과와 다를 수 있습니다. "
+            "정확한 분석을 위해서는 전문가 상담을 권장합니다."
+        ))
 
 
 def generate_pdf_report(company_code: str, output_dir: Optional[str] = None) -> str:
