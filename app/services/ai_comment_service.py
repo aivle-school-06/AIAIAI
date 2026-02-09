@@ -228,7 +228,8 @@ class AICommentService:
                 max_tokens=800,
                 temperature=0.7,
             )
-            return response.strip()
+            # 줄바꿈을 <br>로 변환
+            return response.strip().replace('\n', '<br>')
         except Exception as e:
             logger.error(f"LLM 코멘트 생성 실패: {e}")
             return self._generate_fallback_comment(company_name, period, data)
