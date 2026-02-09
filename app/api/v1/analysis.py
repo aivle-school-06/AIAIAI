@@ -13,13 +13,18 @@ from typing import Optional, List
 from fastapi import APIRouter, Depends, Query, HTTPException
 from fastapi.responses import FileResponse
 
-from app.dependencies import get_data_loader, get_predictor
+from app.dependencies import (
+    get_data_loader, get_predictor, get_news_service, get_dart_service
+)
 from app.core.data_loader import DataLoader
 from app.core.predictor import Predictor
 from app.services.analysis_service import AnalysisService
 from app.services.health_score_service import HealthScoreService
 from app.services.signal_service import SignalService
-from app.models.response import HealthScoreResponse, SignalResponse
+from app.services.ai_comment_service import AICommentService
+from app.services.news_service import NewsService
+from app.services.dart_service import DartService
+from app.models.response import HealthScoreResponse, SignalResponse, AICommentResponse
 from app.core.constants import ALL_TARGETS
 from app.config import settings
 
@@ -73,6 +78,16 @@ def get_signal_service(
 ) -> SignalService:
     """SignalService 의존성 주입"""
     return SignalService(data_loader)
+
+
+def get_ai_comment_service(
+    data_loader: DataLoader = Depends(get_data_loader),
+    predictor: Predictor = Depends(get_predictor),
+    news_service: NewsService = Depends(get_news_service),
+    dart_service: DartService = Depends(get_dart_service),
+) -> AICommentService:
+    """AICommentService 의존성 주입"""
+    return AICommentService(data_loader, predictor, news_service, dart_service)
 
 
 # =============================================================================
@@ -247,6 +262,30 @@ async def get_signals(
         company_code = f'[{company_code}]'
 
     return service.get_signals(company_code, period)
+
+
+@router.get(
+    "/{company_code}/ai-comment",
+    summary="AI 종합 코멘트",
+    description="정형/비정형 데이터를 종합한 AI 코멘트를 생성합니다.",
+    response_model=AICommentResponse,
+)
+async def get_ai_comment(
+    company_code: str,
+    period: Optional[str] = Query(None, description="분기 (예: 20253), 미지정시 최신"),
+    service: AICommentService = Depends(get_ai_comment_service),
+):
+    """
+    AI 종합 코멘트 생성
+
+    - 12개 재무지표 + 예측값 + 건전성 점수 + 신호등
+    - 뉴스 감성 분석 + 사업보고서 요약
+    - 약 500자 내외 종합 코멘트
+    """
+    if not company_code.startswith('['):
+        company_code = f'[{company_code}]'
+
+    return await service.generate_comment(company_code, period)
 
 
 @router.get(

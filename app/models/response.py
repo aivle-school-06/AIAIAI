@@ -247,3 +247,27 @@ class SignalResponse(BaseModel):
                 },
             }
         }
+
+
+# =========================================================================
+# AI 코멘트 응답
+# =========================================================================
+
+class AICommentResponse(BaseModel):
+    """AI 코멘트 응답"""
+    company_code: str = Field(..., description="기업코드")
+    company_name: str = Field(..., description="기업명")
+    industry: str = Field(..., description="업종명")
+    period: str = Field(..., description="분기 (예: 20253)")
+    ai_comment: str = Field(..., description="AI 종합 코멘트 (약 500자)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "company_code": "005930",
+                "company_name": "삼성전자",
+                "industry": "통신 및 방송장비 제조업",
+                "period": "20253",
+                "ai_comment": "삼성전자는 2025년 3분기 기준 재무건전성 점수 90점으로 '안정' 등급을 유지하고 있습니다...",
+            }
+        }
