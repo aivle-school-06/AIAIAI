@@ -1,12 +1,16 @@
 """
-Azure Blob Storage에서 데이터/모델 다운로드
+클라우드 스토리지에서 데이터/모델 다운로드
 ==========================================
 
 컨테이너 시작 시 실행되어 필요한 파일들을 다운로드합니다.
 
-환경변수:
+환경변수 (Azure):
 - AZURE_STORAGE_CONNECTION_STRING: Azure Storage 연결 문자열
 - AZURE_STORAGE_CONTAINER: 컨테이너 이름 (기본값: ai-server-assets)
+
+환경변수 (AWS):
+- AWS_STORAGE_BUCKET: S3 버킷 이름
+- AWS_DEFAULT_REGION: AWS 리전 (기본값: ap-northeast-2)
 """
 import os
 import logging
@@ -101,6 +105,58 @@ def download_from_azure():
         return False
 
 
+def download_from_s3():
+    """AWS S3에서 다운로드"""
+    try:
+        import boto3
+    except ImportError:
+        logger.error("boto3 패키지가 필요합니다: pip install boto3")
+        return False
+
+    bucket_name = os.getenv("AWS_STORAGE_BUCKET")
+    region = os.getenv("AWS_DEFAULT_REGION", "ap-northeast-2")
+
+    if not bucket_name:
+        logger.error("AWS_STORAGE_BUCKET 환경변수가 설정되지 않았습니다.")
+        return False
+
+    try:
+        s3 = boto3.client("s3", region_name=region)
+
+        # 데이터 파일 다운로드
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for filename in ASSETS["data"]:
+            s3_key = f"data/processed/{filename}"
+            local_path = DATA_DIR / filename
+
+            if local_path.exists():
+                logger.info(f"이미 존재: {local_path}")
+                continue
+
+            logger.info(f"다운로드 중: s3://{bucket_name}/{s3_key} -> {local_path}")
+            s3.download_file(bucket_name, s3_key, str(local_path))
+
+        # 모델 파일 다운로드
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        for filename in ASSETS["models"]:
+            s3_key = f"models/{filename}"
+            local_path = MODEL_DIR / filename
+
+            if local_path.exists():
+                logger.info(f"이미 존재: {local_path}")
+                continue
+
+            logger.info(f"다운로드 중: s3://{bucket_name}/{s3_key} -> {local_path}")
+            s3.download_file(bucket_name, s3_key, str(local_path))
+
+        logger.info("모든 파일 다운로드 완료!")
+        return True
+
+    except Exception as e:
+        logger.error(f"S3 다운로드 실패: {e}")
+        return False
+
+
 def check_local_files():
     """로컬 파일 존재 여부 확인"""
     missing = []
@@ -126,5 +182,13 @@ if __name__ == "__main__":
         for f in missing:
             logger.info(f"  - {f}")
 
-        logger.info("Azure Blob Storage에서 다운로드 시도...")
-        download_from_azure()
+        # AWS S3 또는 Azure Blob Storage에서 다운로드
+        if os.getenv("AWS_STORAGE_BUCKET"):
+            logger.info("AWS S3에서 다운로드 시도...")
+            download_from_s3()
+        elif os.getenv("AZURE_STORAGE_CONNECTION_STRING"):
+            logger.info("Azure Blob Storage에서 다운로드 시도...")
+            download_from_azure()
+        else:
+            logger.error("클라우드 스토리지 환경변수가 설정되지 않았습니다.")
+            logger.error("AWS_STORAGE_BUCKET 또는 AZURE_STORAGE_CONNECTION_STRING을 설정하세요.")

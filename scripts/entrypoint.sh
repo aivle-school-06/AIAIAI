@@ -16,12 +16,15 @@ echo "=============================================="
 echo "AI Financial Analysis Server - Starting..."
 echo "=============================================="
 
-# Azure Blob에서 데이터/모델 다운로드 (환경변수가 설정된 경우)
-if [ -n "$AZURE_STORAGE_CONNECTION_STRING" ]; then
+# 클라우드 스토리지에서 데이터/모델 다운로드
+if [ -n "$AWS_STORAGE_BUCKET" ]; then
+    echo "Downloading assets from AWS S3..."
+    python /app/scripts/download_assets.py
+elif [ -n "$AZURE_STORAGE_CONNECTION_STRING" ]; then
     echo "Downloading assets from Azure Blob Storage..."
     python /app/scripts/download_assets.py
 else
-    echo "AZURE_STORAGE_CONNECTION_STRING not set, using local files"
+    echo "No cloud storage configured, using local files"
 fi
 
 # 필수 파일 확인

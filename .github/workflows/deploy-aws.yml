@@ -1,0 +1,124 @@
+# =============================================================================
+# GitHub Actions - AWS EC2 배포
+# =============================================================================
+# main 브랜치에 푸시하면 자동 배포
+
+name: Deploy to AWS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:  # 수동 실행 가능
+
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: aivle-ai-server
+  EC2_AI_SERVER_IP: 10.0.133.217
+
+# OIDC 토큰 발급을 위한 권한
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1. 코드 체크아웃
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 2. AWS 자격증명 설정 (OIDC)
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::160885260227:role/github-actions-ai-server
+          aws-region: ${{ env.AWS_REGION }}
+
+      # 3. ECR 로그인
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4. Docker 이미지 빌드 및 푸시
+      - name: Build and push image to ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      # 5. EC2에 배포 (Bastion 경유)
+      - name: Deploy to EC2
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # SSH 키 설정
+          mkdir -p ~/.ssh
+          echo "${{ secrets.BASTION_SSH_KEY }}" > ~/.ssh/bastion.pem
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2.pem
+          chmod 400 ~/.ssh/bastion.pem ~/.ssh/ec2.pem
+
+          # SSH config 설정
+          cat >> ~/.ssh/config << EOF
+          Host bastion
+              HostName ${{ secrets.BASTION_HOST }}
+              User ec2-user
+              IdentityFile ~/.ssh/bastion.pem
+              StrictHostKeyChecking no
+
+          Host ai-server
+              HostName ${{ env.EC2_AI_SERVER_IP }}
+              User ec2-user
+              IdentityFile ~/.ssh/ec2.pem
+              ProxyJump bastion
+              StrictHostKeyChecking no
+          EOF
+
+          # EC2에서 이미지 pull & 실행
+          ssh ai-server << ENDSSH
+            # ECR 로그인
+            aws ecr get-login-password --region ap-northeast-2 | sudo docker login --username AWS --password-stdin ${ECR_REGISTRY}
+
+            # 기존 컨테이너 중지 및 삭제
+            sudo docker stop ai-server 2>/dev/null || true
+            sudo docker rm ai-server 2>/dev/null || true
+
+            # 새 이미지 pull
+            sudo docker pull ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+            # 컨테이너 실행 (EC2에 저장된 환경변수 파일 사용)
+            sudo docker run -d \
+              --name ai-server \
+              --restart unless-stopped \
+              -p 8000:8000 \
+              --env-file /home/ec2-user/.env \
+              ${ECR_REGISTRY}/${ECR_REPOSITORY}:${IMAGE_TAG}
+
+            # 상태 확인
+            sudo docker ps | grep ai-server
+          ENDSSH
+
+      # 6. 배포 확인
+      - name: Verify deployment
+        run: |
+          echo "=========================================="
+          echo "AWS AI Server deployed!"
+          echo "Private IP: ${{ env.EC2_AI_SERVER_IP }}:8000"
+          echo "=========================================="
+
+          # 헬스체크 (Bastion 경유)
+          for i in {1..12}; do
+            if ssh ai-server "curl -s --max-time 5 http://localhost:8000/api/v1/health" | grep -q "healthy"; then
+              echo "Server is healthy!"
+              exit 0
+            fi
+            echo "Attempt $i/12 - waiting 10s..."
+            sleep 10
+          done
+          echo "Warning: Health check not responding yet"
