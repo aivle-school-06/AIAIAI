@@ -774,8 +774,9 @@ class PDFReportGenerator:
         financial = financial or {}
 
         # 레이더 차트 + 종합 등급
-        grade = summary['overall_grade']
-        score = summary['overall_score']
+        grade = summary.get('overall_grade') or 'N/A'
+        score = summary.get('overall_score')
+        score = score if score is not None else 3.0  # 기본값 3.0
 
         grade_colors = {
             'A+': Colors.GRADE_A_PLUS, 'A': Colors.GRADE_A,
@@ -789,7 +790,8 @@ class PDFReportGenerator:
         cat_scores = []
         for cat in categories:
             cat_data = financial.get(cat, {})
-            cat_scores.append(cat_data.get('score', 3))  # 기본값 3
+            cat_score = cat_data.get('score')
+            cat_scores.append(cat_score if cat_score is not None else 3)  # 기본값 3 (None 처리)
 
         # 차트 중심 및 크기
         center_x = 105  # A4 중앙
