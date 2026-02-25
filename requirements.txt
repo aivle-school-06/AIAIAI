@@ -20,7 +20,7 @@ shap>=0.44.0
 joblib>=1.3.0
 
 # PDF Generation
-fpdf2>=2.7.0
+fpdf2==2.8.5  # 2.8.6 폰트 깨짐 이슈로 버전 고정
 
 # LLM
 openai>=1.10.0
